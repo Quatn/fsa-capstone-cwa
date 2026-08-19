@@ -1,0 +1,7 @@
+# For development use only
+# Copy this file to .env.development in the same directory as this file
+
+NODE_ENV=development
+
+NEXT_PUBLIC_WEB_URL=http://localhost:8080
+NEXT_PUBLIC_API_URL=http://localhost:8081

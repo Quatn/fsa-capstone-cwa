@@ -1,0 +1,87 @@
+services:
+  postgres:
+    image: "postgres:17"
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h localhost -U ${DB_USER} -d ${DB_NAME}"]
+      interval: ${DB_HEALTHCHECK_INTERVAL}
+      timeout: ${DB_HEALTHCHECK_TIMEOUT}
+      retries: ${DB_HEALTHCHECK_RETRIES}
+
+  api:
+    build:
+      context: ./API
+      dockerfile: Dockerfile
+    image: agentic-board-interface-api:latest
+    environment:
+      DB_URI: postgres://${DB_USER}:${DB_PASSWORD}@postgres:5432/${DB_NAME}
+      DB_NAME: ${DB_NAME}
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_HOST: postgres
+      DB_PORT: 5432
+      CORS_ORIGINS: ${WEB_URL}
+      JWT_SECRET: ${JWT_SECRET}
+    ports:
+      - "4000:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:8080/health').then(r => { if (!r.ok) process.exit(1) })"]
+      interval: ${API_HEALTHCHECK_INTERVAL}
+      timeout: ${API_HEALTHCHECK_TIMEOUT}
+      retries: ${API_HEALTHCHECK_RETRIES}
+
+  web:
+    build:
+      context: ./WEB
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_WEB_URL: ${WEB_URL}
+        NEXT_PUBLIC_API_URL: ${API_URL}
+    image: agentic-board-interface-web:latest
+    environment:
+      WEB_URL: ${WEB_URL}
+      API_URL: ${API_URL}
+    ports:
+      - "3000:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # Should only be used as a job via `docker compose run --rm seed`, or as the full setup flow via 
+  # `docker compose --profile full-flow up`
+  # Remember to use `docker compose --profile full-flow down -v` to *CLEAN ALL DATABASE DATA* before using 
+  # the command (because full-flow will seed the database from the ground up)
+  seed:
+    image: 'postgres:17'
+    profiles: ['full-flow']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./scripts:/scripts:ro
+    restart: "no"
+    environment:
+      PGPASSWORD: ${DB_PASSWORD}
+    command: >
+      sh -ec "
+        echo 'Creating schema...';
+        psql --host=postgres --username=${DB_USER} --dbname=${DB_NAME} --file=/scripts/01-schema.sql;
+        echo 'Done creating schema';
+
+        echo 'Seeding data...';
+        psql --host=postgres --username=${DB_USER} --dbname=${DB_NAME} --file=/scripts/02-seed.sql;
+        echo 'Seed complete';
+      "
+
+volumes:
+  db-data:
