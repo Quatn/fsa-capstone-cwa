@@ -1,3 +1,5 @@
+"use client";
+
 import React from "react";
 import { AuthContextBundle } from "./auth-context";
 import { useFetch } from "@/hooks/useFetch";
