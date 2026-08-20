@@ -1,6 +1,6 @@
 import { Http3Server } from "@fails-components/webtransport";
 import { readFileSync } from "fs";
-import { createHash } from "crypto";
+import { createHash, X509Certificate } from "crypto";
 
 const cert = readFileSync("./cert.pem");
 const key = readFileSync("./key.pem");
@@ -14,7 +14,8 @@ const h3Server = new Http3Server({
 });
 
 // print the cert hash you'll need on the client
-console.log(createHash("sha256").update(cert).digest("base64"));
+const derCert = new X509Certificate(cert).raw;
+console.log(createHash("sha256").update(derCert).digest("base64"));
 
 (async () => {
   const stream = await h3Server.sessionStream("/wt");
