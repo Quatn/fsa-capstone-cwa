@@ -15,7 +15,7 @@ CORS_ORIGINS=http://localhost:8080
 DB_NAME=cwa
 DB_USER=app
 DB_PASSWORD=TheAllegations112233456
-DB_HOST=postgres
+DB_HOST=localhost
 DB_PORT=5432
 
 DB_HEALTHCHECK_INTERVAL=2s

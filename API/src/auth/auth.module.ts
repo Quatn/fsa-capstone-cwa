@@ -6,6 +6,7 @@ import { UserModule } from 'src/user/user.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthSession } from './entity/auth-session.entity';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { AUTH_SESSION_VALIDATOR } from './auth.contracts';
 
 @Module({
   imports: [
@@ -25,6 +26,32 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
     UserModule,
   ],
   controllers: [AuthController],
-  providers: [AuthService],
+  providers: [
+    // {
+    //   provide: 'TEMP_USE_VALUE',
+    //   useValue:
+    //     'Temporary value used for demonstration purposes, remove before merging',
+    // },
+    // {
+    //   provide: 'TEMP_USE_FACTORY',
+    //   useFactory: () => {
+    //     return 'Temporary value used for demonstration purposes, remove before merging';
+    //   },
+    // },
+    // {
+    //   provide: 'TEMP_USE_FACTORY_ASYNC',
+    //   useFactory: async () => {
+    //     return Promise.resolve(
+    //       'Temporary value used for demonstration purposes, remove before merging',
+    //     );
+    //   },
+    // },
+
+    AuthService,
+    {
+      provide: AUTH_SESSION_VALIDATOR,
+      useExisting: AuthService,
+    },
+  ],
 })
 export class AuthModule { }

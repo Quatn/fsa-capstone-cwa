@@ -7,10 +7,10 @@ import {
   comparePassword,
   hashPassword,
 } from 'src/common/utils/password-hash-utils';
-import { UserRole } from 'src/common/dto/UserRoles';
+import { UserAuthenticator, UserReader, UserWriter } from './user.contracts';
 
 @Injectable()
-export class UserService {
+export class UserService implements UserReader, UserWriter, UserAuthenticator {
   constructor(
     @InjectRepository(User)
     private usersRepository: Repository<User>,
@@ -44,13 +44,11 @@ export class UserService {
   }
 
   async createUser(
-    name: string,
-    email: string,
+    user: Omit<User, 'id' | 'passwordHash' | 'createdAt' | 'updatedAt'>,
     password: string,
-    role: UserRole,
   ): Promise<User> {
     const userExists = await this.usersRepository.findOne({
-      where: { email },
+      where: { email: user.email },
     });
 
     if (userExists) {
@@ -64,24 +62,19 @@ export class UserService {
     const hashedPassword = await hashPassword(password);
 
     return this.usersRepository.save({
-      name,
+      ...user,
       passwordHash: hashedPassword,
-      email,
-      role,
+      id: undefined,
     });
   }
 
-  async getUserById(userId: string): Promise<User> {
+  async findById(userId: string): Promise<User | null> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
     });
 
     if (!user) {
-      throw new ApiError(
-        'User not found',
-        HttpStatus.NOT_FOUND,
-        'ERR_USER_NOT_FOUND',
-      );
+      return null;
     }
 
     return user;

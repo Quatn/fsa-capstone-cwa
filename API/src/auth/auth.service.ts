@@ -1,4 +1,4 @@
-import { HttpStatus, Injectable } from '@nestjs/common';
+import { HttpStatus, Inject, Injectable } from '@nestjs/common';
 import { AuthSession } from './entity/auth-session.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
@@ -7,12 +7,13 @@ import { randomUUID } from 'crypto';
 import { RefreshTokenPayload } from './types/RefreshToken';
 import { ApiError } from 'src/common/lib/errors/ApiError';
 import { compareToken, hashToken } from 'src/common/utils/token-hash-utils';
-import { UserService } from 'src/user/user.service';
 import check from 'check-types';
 import { UserDetails } from 'src/common/dto/UserDetails';
+import { AuthSessionValidator } from './auth.contracts';
+import { USER_READER, type UserReader } from 'src/user/user.contracts';
 
 @Injectable()
-export class AuthService {
+export class AuthService implements AuthSessionValidator {
   private readonly refreshTokenExpirationSeconds: number;
   private readonly accessTokenExpirationSeconds: number;
 
@@ -20,7 +21,8 @@ export class AuthService {
     @InjectRepository(AuthSession)
     private authSessionsRepository: Repository<AuthSession>,
     private jwtService: JwtService,
-    private userService: UserService,
+    @Inject(USER_READER)
+    private readonly userReader: UserReader,
   ) {
     const refreshTokenExpirationSeconds = parseInt(
       process.env.REFRESH_TOKEN_EXPIRATION_SECONDS ?? '',
@@ -147,7 +149,16 @@ export class AuthService {
   async refreshByAuthSession(
     authSession: AuthSession,
   ): Promise<{ userDetails: UserDetails; accessToken: string }> {
-    const user = await this.userService.getUserById(authSession.userId);
+    const user = await this.userReader.findById(authSession.userId);
+
+    if (!user) {
+      throw new ApiError(
+        'User not found',
+        HttpStatus.NOT_FOUND,
+        'ERR_USER_NOT_FOUND',
+      );
+    }
+
     const accessToken = await this.jwtService.signAsync(
       { userId: user.id },
       { expiresIn: this.accessTokenExpirationSeconds },
