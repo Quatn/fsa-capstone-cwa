@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="vi">
+  <head>
+    <meta charset="utf-8" />
+    <title>CWA Demo — WebTransport + CRDT + Redis</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        padding: 16px;
+      }
+      canvas {
+        border: 1px solid #333;
+        cursor: crosshair;
+        margin-top: 10px;
+      }
+      .colors button {
+        width: 28px;
+        height: 28px;
+        border: 2px solid #999;
+        cursor: pointer;
+        margin-right: 4px;
+      }
+      button {
+        cursor: pointer;
+      }
+    </style>
+  </head>
+  <body>
+    <button id="drawBtn">➕ Vẽ hình vuông mới</button>
+    <button id="reloadBtn">🔄 Tải lại trạng thái (giả lập join phòng)</button>
+    <p>
+      Tô màu (chọn 1 hình vuông trước):
+      <span class="colors">
+        <button data-color="#ef4444" style="background: #ef4444"></button>
+        <button data-color="#3b82f6" style="background: #3b82f6"></button>
+        <button data-color="#22c55e" style="background: #22c55e"></button>
+        <button data-color="#eab308" style="background: #eab308"></button>
+      </span>
+    </p>
+    <canvas id="board" width="400" height="300"></canvas>
+
+    <script>
+      const canvas = document.getElementById("board");
+      const ctx = canvas.getContext("2d");
+      const clientId = crypto.randomUUID().slice(0, 8);
+      const elements = {}; // elementId -> { x, y, color }
+      let selectedId = null;
+      let draggingId = null;
+
+      // Dán hash sha256 in ra từ console server vào đây
+      const CERT_HASH = "Vzkt3snI+2vSksBCVK3p9ABWj4P8SGJloXZhp6lVOKs=";
+
+      function render() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        for (const [id, el] of Object.entries(elements)) {
+          ctx.fillStyle = el.color || "#9ca3af";
+          ctx.fillRect(el.x - 15, el.y - 15, 30, 30);
+          if (id === selectedId) {
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(el.x - 17, el.y - 17, 34, 34);
+          }
+        }
+      }
+
+      async function main() {
+        const transport = new WebTransport("https://127.0.0.1:5000/wt", {
+          serverCertificateHashes: [
+            {
+              algorithm: "sha-256",
+              value: Uint8Array.from(atob(CERT_HASH), (c) => c.charCodeAt(0)),
+            },
+          ],
+        });
+        await transport.ready;
+        console.log("connected, clientId =", clientId);
+
+        async function sendOp(elementId, field, value) {
+          const stream = await transport.createUnidirectionalStream();
+          const writer = stream.getWriter();
+          await writer.write(
+            new TextEncoder().encode(
+              JSON.stringify({
+                elementId,
+                field,
+                value,
+                time: [Date.now(), clientId],
+              }),
+            ),
+          );
+          await writer.close();
+        }
+
+        async function loadState() {
+          const stream = await transport.createBidirectionalStream();
+          const writer = stream.writable.getWriter();
+          const reader = stream.readable.getReader();
+          await writer.write(new TextEncoder().encode("GET_STATE"));
+          const { value } = await reader.read();
+          const raw = JSON.parse(new TextDecoder().decode(value));
+
+          for (const key in elements) delete elements[key]; // reset trước khi nạp lại
+          for (const [hashField, fieldDataRaw] of Object.entries(raw)) {
+            const [id, field] = hashField.split(":");
+            const { value: fieldValue } = JSON.parse(fieldDataRaw);
+            elements[id] = elements[id] || { x: 0, y: 0, color: "#9ca3af" };
+            if (field === "position") {
+              elements[id].x = fieldValue.x;
+              elements[id].y = fieldValue.y;
+            }
+            if (field === "color") elements[id].color = fieldValue;
+          }
+          render();
+          console.log(
+            "state loaded:",
+            Object.keys(elements).length,
+            "elements",
+          );
+        }
+
+        await loadState();
+
+        // --- 1. Vẽ mới ---
+        document.getElementById("drawBtn").addEventListener("click", () => {
+          const id = crypto.randomUUID().slice(0, 8);
+          const x = 50 + Math.random() * 300;
+          const y = 50 + Math.random() * 200;
+          elements[id] = { x, y, color: "#9ca3af" };
+          render();
+          sendOp(id, "position", { x, y });
+        });
+
+        // --- 2. Di chuyển (kéo thả) ---
+        canvas.addEventListener("mousedown", (e) => {
+          const hit = Object.entries(elements).find(
+            ([, el]) =>
+              Math.abs(e.offsetX - el.x) < 17 &&
+              Math.abs(e.offsetY - el.y) < 17,
+          );
+          if (hit) {
+            selectedId = draggingId = hit[0];
+            render();
+          }
+        });
+        canvas.addEventListener("mousemove", (e) => {
+          if (!draggingId) return;
+          elements[draggingId].x = e.offsetX;
+          elements[draggingId].y = e.offsetY;
+          render(); // optimistic update — không chờ server
+        });
+        canvas.addEventListener("mouseup", () => {
+          if (!draggingId) return;
+          const el = elements[draggingId];
+          sendOp(draggingId, "position", { x: el.x, y: el.y }); // chỉ gửi 1 lần lúc thả tay
+          draggingId = null;
+        });
+
+        // --- 3. Tô màu (demo CRDT field-level: field "color" độc lập với field "position") ---
+        document
+          .querySelectorAll(".colors button[data-color]")
+          .forEach((btn) => {
+            btn.addEventListener("click", () => {
+              if (!selectedId) {
+                alert("Chọn 1 hình vuông trước");
+                return;
+              }
+              const color = btn.dataset.color;
+              elements[selectedId].color = color;
+              render();
+              sendOp(selectedId, "color", color);
+            });
+          });
+
+        document
+          .getElementById("reloadBtn")
+          .addEventListener("click", loadState);
+
+        // --- Datagram: gửi vị trí con trỏ, throttle nhẹ — KHÔNG liên quan tới Redis ---
+        let lastSent = 0;
+        canvas.addEventListener("mousemove", async (e) => {
+          if (Date.now() - lastSent < 100) return;
+          lastSent = Date.now();
+          const w = transport.datagrams.writable.getWriter();
+          await w.write(
+            new TextEncoder().encode(
+              JSON.stringify({ clientId, x: e.offsetX, y: e.offsetY }),
+            ),
+          );
+          w.releaseLock();
+        });
+      }
+
+      main().catch(console.error);
+    </script>
+  </body>
+</html>
