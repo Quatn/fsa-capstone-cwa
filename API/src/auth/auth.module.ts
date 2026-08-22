@@ -27,26 +27,6 @@ import { AUTH_SESSION_VALIDATOR } from './auth.contracts';
   ],
   controllers: [AuthController],
   providers: [
-    // {
-    //   provide: 'TEMP_USE_VALUE',
-    //   useValue:
-    //     'Temporary value used for demonstration purposes, remove before merging',
-    // },
-    // {
-    //   provide: 'TEMP_USE_FACTORY',
-    //   useFactory: () => {
-    //     return 'Temporary value used for demonstration purposes, remove before merging';
-    //   },
-    // },
-    // {
-    //   provide: 'TEMP_USE_FACTORY_ASYNC',
-    //   useFactory: async () => {
-    //     return Promise.resolve(
-    //       'Temporary value used for demonstration purposes, remove before merging',
-    //     );
-    //   },
-    // },
-
     AuthService,
     {
       provide: AUTH_SESSION_VALIDATOR,
