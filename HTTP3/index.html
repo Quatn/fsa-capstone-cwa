@@ -39,6 +39,28 @@
     </p>
     <canvas id="board" width="400" height="300"></canvas>
 
+    <p>
+      <label
+        ><input type="checkbox" id="lossSim" /> Mô phỏng mất gói Datagram
+        (30%)</label
+      >
+      — 📡 Đã gửi: <b id="dgSent">0</b> · 🚫 Mô phỏng mất:
+      <b id="dgDropped">0</b>
+    </p>
+    <div
+      id="log"
+      style="
+        margin-top: 8px;
+        height: 150px;
+        overflow-y: auto;
+        border: 1px solid #ccc;
+        padding: 8px;
+        font-family: monospace;
+        font-size: 12px;
+        background: #fafafa;
+      "
+    ></div>
+
     <script>
       const canvas = document.getElementById("board");
       const ctx = canvas.getContext("2d");
@@ -46,6 +68,16 @@
       const elements = {}; // elementId -> { x, y, color }
       let selectedId = null;
       let draggingId = null;
+      let ghostCursor = null; // { x, y } — vẽ từ datagram server echo lại
+
+      function logEvent(channel, text) {
+        const color = channel === "STREAM" ? "#2563eb" : "#d97706";
+        const line = document.createElement("div");
+        line.innerHTML = `<b style="color:${color}">[${channel}]</b> ${text}`;
+        const logEl = document.getElementById("log");
+        logEl.prepend(line);
+        while (logEl.children.length > 30) logEl.removeChild(logEl.lastChild);
+      }
 
       // Dán hash sha256 in ra từ console server vào đây
       const CERT_HASH = "Vzkt3snI+2vSksBCVK3p9ABWj4P8SGJloXZhp6lVOKs=";
@@ -60,6 +92,15 @@
             ctx.lineWidth = 2;
             ctx.strokeRect(el.x - 17, el.y - 17, 34, 34);
           }
+        }
+        if (ghostCursor) {
+          ctx.strokeStyle = "#d97706"; // cam — cùng màu nhãn [DATAGRAM] trong log
+          ctx.setLineDash([3, 3]);
+          ctx.lineWidth = 2;
+          ctx.beginPath();
+          ctx.arc(ghostCursor.x, ghostCursor.y, 8, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
         }
       }
 
@@ -76,6 +117,7 @@
         console.log("connected, clientId =", clientId);
 
         async function sendOp(elementId, field, value) {
+          logEvent("STREAM", `${field} → ${JSON.stringify(value)}`);
           const stream = await transport.createUnidirectionalStream();
           const writer = stream.getWriter();
           await writer.write(
@@ -90,6 +132,18 @@
           );
           await writer.close();
         }
+
+        // Nhận lại datagram server echo — vẽ ghost cursor để chứng minh round-trip
+        (async () => {
+          const reader = transport.datagrams.readable.getReader();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const echoed = JSON.parse(new TextDecoder().decode(value));
+            ghostCursor = { x: echoed.x, y: echoed.y };
+            render();
+          }
+        })();
 
         async function loadState() {
           const stream = await transport.createBidirectionalStream();
@@ -177,9 +231,25 @@
 
         // --- Datagram: gửi vị trí con trỏ, throttle nhẹ — KHÔNG liên quan tới Redis ---
         let lastSent = 0;
+        let dgSentCount = 0,
+          dgDroppedCount = 0;
+        const dgSentEl = document.getElementById("dgSent");
+        const dgDroppedEl = document.getElementById("dgDropped");
+
         canvas.addEventListener("mousemove", async (e) => {
           if (Date.now() - lastSent < 100) return;
           lastSent = Date.now();
+
+          // Mô phỏng mất gói: cố tình KHÔNG gửi — minh hoạ "mất vài gói vẫn ổn"
+          if (
+            document.getElementById("lossSim").checked &&
+            Math.random() < 0.3
+          ) {
+            dgDroppedEl.textContent = ++dgDroppedCount;
+            return;
+          }
+
+          dgSentEl.textContent = ++dgSentCount;
           const w = transport.datagrams.writable.getWriter();
           await w.write(
             new TextEncoder().encode(
