@@ -3,3 +3,5 @@
 /build
 
 /certs
+cert.pem
+key.pem

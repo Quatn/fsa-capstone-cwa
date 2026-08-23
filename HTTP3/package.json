@@ -2,6 +2,7 @@
   "name": "cwa-http3",
   "version": "1.0.0",
   "description": "",
+  "type": "module",
   "main": "index.js",
   "scripts": {
     "dev": "tsx watch src/server.ts",
@@ -12,7 +13,9 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@fails-components/webtransport": "^1.6.7"
+    "@fails-components/webtransport": "^1.6.7",
+    "@fails-components/webtransport-transport-http3-quiche": "^1.6.7",
+    "redis": "^6.2.1"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
