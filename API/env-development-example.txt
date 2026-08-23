@@ -1,5 +1,5 @@
 # For development use only
-# Copy this file to .env.development in the same directory as this file
+# Copy this file to .env in the same directory as this file
 
 NODE_ENV=development
 
