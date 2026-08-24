@@ -1,0 +1,4 @@
+# For development use only
+# Copy this file to .env in the same directory as this file
+
+REDIS_URL=redis://localhost:6379

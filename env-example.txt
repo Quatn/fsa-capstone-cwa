@@ -7,6 +7,7 @@ ACCESS_TOKEN_EXPIRATION_SECONDS=1800 # 60 * 30 (30 mins)
 
 WEB_URL=http://localhost:3000
 API_URL=http://localhost:4000
+HTTP3_URL=https://localhost:5000
 
 DB_NAME=cwa
 DB_USER=app

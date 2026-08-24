@@ -6,6 +6,10 @@ import { createClient } from "redis";
 const cert = readFileSync("./cert.pem");
 const key = readFileSync("./key.pem");
 
+console.log(cert);
+console.log(key);
+
+
 const h3Server = new Http3Server({
   port: 5000,
   host: "0.0.0.0",
