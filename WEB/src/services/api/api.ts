@@ -8,6 +8,4 @@ const api = axios.create({
   // headers: { "X-Custom-Header": "foobar" },
 });
 
-console.log(api.defaults.baseURL);
-
 export default api;

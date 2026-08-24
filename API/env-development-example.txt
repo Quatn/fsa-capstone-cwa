@@ -1,5 +1,5 @@
 # For development use only
-# Copy this file to .env.development in the same directory as this file
+# Copy this file to .env in the same directory as this file
 
 NODE_ENV=development
 
@@ -15,13 +15,8 @@ CORS_ORIGINS=http://localhost:8080
 DB_NAME=cwa
 DB_USER=app
 DB_PASSWORD=TheAllegations112233456
-DB_HOST=postgres
+DB_HOST=localhost
 DB_PORT=5432
 
-DB_HEALTHCHECK_INTERVAL=2s
-DB_HEALTHCHECK_TIMEOUT=5s
-DB_HEALTHCHECK_RETRIES=20
-
-API_HEALTHCHECK_INTERVAL=2s
-API_HEALTHCHECK_TIMEOUT=5s
-API_HEALTHCHECK_RETRIES=20
+REDIS_HOST=localhost
+REDIS_PORT=6379
