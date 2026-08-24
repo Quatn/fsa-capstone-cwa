@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   HttpStatus,
+  Inject,
   Post,
   Req,
   Res,
@@ -11,20 +12,32 @@ import { LoginDto } from './dto/LoginDto';
 import { ApiResponse } from 'src/common/lib/ApiResponse';
 import { UserDetails } from 'src/common/dto/UserDetails';
 import { successResponse } from 'src/common/utils/api-response-utils';
-import { AuthService } from './auth.service';
-import { UserService } from 'src/user/user.service';
 import { EMAIL_REGEX } from 'src/common/lib/regex/email.regex';
 import { type Request, type Response } from 'express';
 import { REFRESH_TOKEN_COOKIE_NAME } from 'src/common/constants';
 import { ApiError } from 'src/common/lib/errors/ApiError';
 import { RegisterDto } from './dto/RegisterDto';
 import check from 'check-types';
+import {
+  AUTH_SESSION_VALIDATOR,
+  type AuthSessionValidator,
+} from './auth.contracts';
+import {
+  USER_AUTHENTICATOR,
+  USER_WRITER,
+  type UserAuthenticator,
+  type UserWriter,
+} from 'src/user/user.contracts';
 
 @Controller('auth')
 export class AuthController {
   constructor(
-    private readonly authService: AuthService,
-    private readonly userService: UserService,
+    @Inject(AUTH_SESSION_VALIDATOR)
+    private readonly authSessionValidator: AuthSessionValidator,
+    @Inject(USER_WRITER)
+    private readonly userWriter: UserWriter,
+    @Inject(USER_AUTHENTICATOR)
+    private readonly userAuthenticator: UserAuthenticator,
   ) { }
 
   @Post('login')
@@ -36,9 +49,14 @@ export class AuthController {
 
     // Handle login using email
     if (EMAIL_REGEX.test(loginKey)) {
-      const user = await this.userService.loginWithEmail(loginKey, password);
+      const user = await this.userAuthenticator.loginWithEmail(
+        loginKey,
+        password,
+      );
 
-      const { refreshToken } = await this.authService.authenticateUser(user.id);
+      const { refreshToken } = await this.authSessionValidator.authenticateUser(
+        user.id,
+      );
 
       res.cookie(REFRESH_TOKEN_COOKIE_NAME, refreshToken);
 
@@ -64,14 +82,14 @@ export class AuthController {
   ): Promise<ApiResponse<UserDetails>> {
     const { name, email, password } = form;
 
-    const user = await this.userService.createUser(
-      name,
-      email,
+    const user = await this.userWriter.createUser(
+      { name, email, role: 'user' },
       password,
-      'user',
     );
 
-    const { refreshToken } = await this.authService.authenticateUser(user.id);
+    const { refreshToken } = await this.authSessionValidator.authenticateUser(
+      user.id,
+    );
 
     res.cookie(REFRESH_TOKEN_COOKIE_NAME, refreshToken);
 
@@ -90,7 +108,6 @@ export class AuthController {
     const { [REFRESH_TOKEN_COOKIE_NAME]: refreshToken } = req.cookies as {
       [REFRESH_TOKEN_COOKIE_NAME]?: string;
     };
-    console.log(req.cookies);
 
     if (!check.string(refreshToken)) {
       throw new ApiError(
@@ -101,9 +118,11 @@ export class AuthController {
     }
 
     const authSession =
-      await this.authService.verifyAndRefreshTokenAndAuthSession(refreshToken);
+      await this.authSessionValidator.verifyAndRefreshTokenAndAuthSession(
+        refreshToken,
+      );
     const { userDetails, accessToken } =
-      await this.authService.refreshByAuthSession(authSession);
+      await this.authSessionValidator.refreshByAuthSession(authSession);
 
     return successResponse('Refresh successful', {
       userDetails,

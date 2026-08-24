@@ -18,7 +18,9 @@ const x509 = new X509Certificate(cert);
 const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
 console.log("Cert hash (dán vào client):", certHashBase64);
 
-const redis = createClient();
+const redis = createClient({
+  url: process.env.REDIS_URL ?? "redis://localhost:6379",
+});
 redis.on("error", (err) => console.error("Redis error:", err));
 await redis.connect();
 

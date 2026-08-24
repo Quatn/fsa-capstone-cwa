@@ -5,3 +5,6 @@
 /certs
 cert.pem
 key.pem
+
+# dotenv environment variable files
+.env*
