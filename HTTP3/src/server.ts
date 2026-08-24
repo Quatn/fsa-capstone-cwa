@@ -26,7 +26,7 @@ await redis.connect();
 
 const ROOM_KEY = "board:demo-room";
 
-// ---- GHI: nhận operation qua unidirectional stream, merge field-level, ghi Redis ----
+// write stream: nhận operation qua unidirectional stream, merge field-level, ghi Redis
 async function handleWriteStream(stream: ReadableStream<Uint8Array>) {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
@@ -41,7 +41,7 @@ async function handleWriteStream(stream: ReadableStream<Uint8Array>) {
   const existingRaw = await redis.hGet(ROOM_KEY, hashField);
   const existing = existingRaw ? JSON.parse(existingRaw) : null;
 
-  // CRDT merge tối giản: Last-Write-Wins theo timestamp, ở cấp FIELD (không phải cấp object)
+  // merge crdt operation: LWW theo timestamp, field-levels
   if (!existing || op.time[0] > existing.time[0]) {
     await redis.hSet(ROOM_KEY, hashField, JSON.stringify({ value: op.value, time: op.time }));
     console.log(`merged  ${hashField} =`, op.value);
@@ -50,7 +50,7 @@ async function handleWriteStream(stream: ReadableStream<Uint8Array>) {
   }
 }
 
-// ---- ĐỌC: client gửi "GET_STATE" qua bidirectional stream, trả về toàn bộ board ----
+// read: client gửi "GET_STATE" qua bidirectional stream, trả về toàn bộ board
 async function handleReadStream(stream: {
   readable: ReadableStream<Uint8Array>;
   writable: WritableStream<Uint8Array>;
@@ -66,16 +66,14 @@ async function handleReadStream(stream: {
   await writer.close();
 }
 
-// ---- DATAGRAM: cursor — chỉ relay, KHÔNG chạm Redis (khác biệt cố ý với Stream) ----
+// datagram: cursor relay, không vào Redis
 async function handleDatagrams(session: any) {
   const reader = session.datagrams.readable.getReader();
   const writer = session.datagrams.writable.getWriter();
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    // Echo lại nguyên payload — dùng để client vẽ "ghost cursor",
-    // chứng minh trực quan round-trip qua Datagram mà KHÔNG hề chạm Redis
-    // (khác `redis-cli monitor`/RedisInsight sẽ không thấy gì xuất hiện ở đây).
+    // echo lại payload, vẽ "ghost cursor",
     await writer.write(value);
   }
 }

@@ -26,8 +26,8 @@
     </style>
   </head>
   <body>
-    <button id="drawBtn">➕ Vẽ hình vuông mới</button>
-    <button id="reloadBtn">🔄 Tải lại trạng thái (giả lập join phòng)</button>
+    <button id="drawBtn">Vẽ hình vuông mới</button>
+    <button id="reloadBtn">Tải lại trạng thái (giả lập join phòng)</button>
     <p>
       Tô màu (chọn 1 hình vuông trước):
       <span class="colors">
@@ -41,10 +41,10 @@
 
     <p>
       <label
-        ><input type="checkbox" id="lossSim" /> Mô phỏng mất gói Datagram
+        ><input type="checkbox" id="lossSim" /> package loss
         (30%)</label
       >
-      — 📡 Đã gửi: <b id="dgSent">0</b> · 🚫 Mô phỏng mất:
+      —  sent: <b id="dgSent">0</b> ·  loss:
       <b id="dgDropped">0</b>
     </p>
     <div
@@ -79,7 +79,7 @@
         while (logEl.children.length > 30) logEl.removeChild(logEl.lastChild);
       }
 
-      // Dán hash sha256 in ra từ console server vào đây
+      // paste hash sha256 từ console server 
       const CERT_HASH = "Vzkt3snI+2vSksBCVK3p9ABWj4P8SGJloXZhp6lVOKs=";
 
       function render() {
@@ -94,7 +94,7 @@
           }
         }
         if (ghostCursor) {
-          ctx.strokeStyle = "#d97706"; // cam — cùng màu nhãn [DATAGRAM] trong log
+          ctx.strokeStyle = "#d97706"; 
           ctx.setLineDash([3, 3]);
           ctx.lineWidth = 2;
           ctx.beginPath();
@@ -133,7 +133,7 @@
           await writer.close();
         }
 
-        // Nhận lại datagram server echo — vẽ ghost cursor để chứng minh round-trip
+        // nhận datagram server echo, vẽ ghost cursor
         (async () => {
           const reader = transport.datagrams.readable.getReader();
           while (true) {
@@ -174,7 +174,7 @@
 
         await loadState();
 
-        // --- 1. Vẽ mới ---
+        // vẽ mới 
         document.getElementById("drawBtn").addEventListener("click", () => {
           const id = crypto.randomUUID().slice(0, 8);
           const x = 50 + Math.random() * 300;
@@ -184,7 +184,7 @@
           sendOp(id, "position", { x, y });
         });
 
-        // --- 2. Di chuyển (kéo thả) ---
+        // di chuyển (kéo thả) 
         canvas.addEventListener("mousedown", (e) => {
           const hit = Object.entries(elements).find(
             ([, el]) =>
@@ -209,7 +209,7 @@
           draggingId = null;
         });
 
-        // --- 3. Tô màu (demo CRDT field-level: field "color" độc lập với field "position") ---
+        // tô màu 
         document
           .querySelectorAll(".colors button[data-color]")
           .forEach((btn) => {
@@ -229,7 +229,7 @@
           .getElementById("reloadBtn")
           .addEventListener("click", loadState);
 
-        // --- Datagram: gửi vị trí con trỏ, throttle nhẹ — KHÔNG liên quan tới Redis ---
+        // datagram: gửi vị trí con trỏ, throttle nhẹ
         let lastSent = 0;
         let dgSentCount = 0,
           dgDroppedCount = 0;
@@ -240,7 +240,7 @@
           if (Date.now() - lastSent < 100) return;
           lastSent = Date.now();
 
-          // Mô phỏng mất gói: cố tình KHÔNG gửi — minh hoạ "mất vài gói vẫn ổn"
+          // package loss simulator
           if (
             document.getElementById("lossSim").checked &&
             Math.random() < 0.3
