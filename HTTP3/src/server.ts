@@ -73,12 +73,14 @@ async function handleReadStream(stream: {
 // ---- DATAGRAM: cursor — chỉ relay, KHÔNG chạm Redis (khác biệt cố ý với Stream) ----
 async function handleDatagrams(session: any) {
   const reader = session.datagrams.readable.getReader();
+  const writer = session.datagrams.writable.getWriter();
   while (true) {
-    const { done } = await reader.read();
+    const { done, value } = await reader.read();
     if (done) break;
-    // Cố tình KHÔNG log ở đây — tần suất cao (mỗi lần di chuột).
-    // Điểm cần chứng minh: mở `redis-cli monitor` sẽ không thấy gì xuất hiện
-    // khi di chuột, khác hẳn với việc vẽ/kéo/tô màu (đi qua Stream).
+    // Echo lại nguyên payload — dùng để client vẽ "ghost cursor",
+    // chứng minh trực quan round-trip qua Datagram mà KHÔNG hề chạm Redis
+    // (khác `redis-cli monitor`/RedisInsight sẽ không thấy gì xuất hiện ở đây).
+    await writer.write(value);
   }
 }
 
