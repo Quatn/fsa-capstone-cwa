@@ -26,8 +26,8 @@
     </style>
   </head>
   <body>
-    <button id="drawBtn">Vẽ hình vuông mới</button>
-    <button id="reloadBtn">Tải lại trạng thái (giả lập join phòng)</button>
+    <button id="drawBtn">➕ Vẽ hình vuông mới</button>
+    <button id="reloadBtn">🔄 Tải lại trạng thái (giả lập join phòng)</button>
     <p>
       Tô màu (chọn 1 hình vuông trước):
       <span class="colors">
@@ -41,10 +41,10 @@
 
     <p>
       <label
-        ><input type="checkbox" id="lossSim" /> package loss
+        ><input type="checkbox" id="lossSim" /> Mô phỏng mất gói Datagram
         (30%)</label
       >
-      —  sent: <b id="dgSent">0</b> ·  loss:
+      — 📡 Đã gửi: <b id="dgSent">0</b> · 🚫 Mô phỏng mất:
       <b id="dgDropped">0</b>
     </p>
     <div
@@ -68,7 +68,7 @@
       const elements = {}; // elementId -> { x, y, color }
       let selectedId = null;
       let draggingId = null;
-      let ghostCursor = null; // { x, y } — vẽ từ datagram server echo lại
+      let remoteCursor = null; // { x, y } — vị trí con trỏ người KHÁC, nhận qua Datagram relay
 
       function logEvent(channel, text) {
         const color = channel === "STREAM" ? "#2563eb" : "#d97706";
@@ -79,7 +79,7 @@
         while (logEl.children.length > 30) logEl.removeChild(logEl.lastChild);
       }
 
-      // paste hash sha256 từ console server 
+      // Dán hash sha256 in ra từ console server vào đây
       const CERT_HASH = "Vzkt3snI+2vSksBCVK3p9ABWj4P8SGJloXZhp6lVOKs=";
 
       function render() {
@@ -93,12 +93,12 @@
             ctx.strokeRect(el.x - 17, el.y - 17, 34, 34);
           }
         }
-        if (ghostCursor) {
-          ctx.strokeStyle = "#d97706"; 
+        if (remoteCursor) {
+          ctx.strokeStyle = "#d97706"; // cam — cùng màu nhãn [DATAGRAM] trong log
           ctx.setLineDash([3, 3]);
           ctx.lineWidth = 2;
           ctx.beginPath();
-          ctx.arc(ghostCursor.x, ghostCursor.y, 8, 0, Math.PI * 2);
+          ctx.arc(remoteCursor.x, remoteCursor.y, 8, 0, Math.PI * 2);
           ctx.stroke();
           ctx.setLineDash([]);
         }
@@ -133,15 +133,65 @@
           await writer.close();
         }
 
-        // nhận datagram server echo, vẽ ghost cursor
+        // Nhận datagram — giờ là cursor của NGƯỜI KHÁC (server đã relay, không còn echo)
         (async () => {
           const reader = transport.datagrams.readable.getReader();
           while (true) {
             const { done, value } = await reader.read();
             if (done) break;
-            const echoed = JSON.parse(new TextDecoder().decode(value));
-            ghostCursor = { x: echoed.x, y: echoed.y };
+            const remote = JSON.parse(new TextDecoder().decode(value));
+            remoteCursor = { x: remote.x, y: remote.y };
             render();
+          }
+        })();
+
+        function concatChunks(chunks) {
+          const total = chunks.reduce((sum, c) => sum + c.length, 0);
+          const result = new Uint8Array(total);
+          let offset = 0;
+          for (const c of chunks) {
+            result.set(c, offset);
+            offset += c.length;
+          }
+          return result;
+        }
+
+        function applyOp(op) {
+          elements[op.elementId] = elements[op.elementId] || {
+            x: 0,
+            y: 0,
+            color: "#9ca3af",
+          };
+          if (op.field === "position") {
+            elements[op.elementId].x = op.value.x;
+            elements[op.elementId].y = op.value.y;
+          }
+          if (op.field === "color") elements[op.elementId].color = op.value;
+          render();
+          logEvent(
+            "STREAM",
+            `nhận từ người khác: ${op.field} → ${JSON.stringify(op.value)}`,
+          );
+        }
+
+        // Nghe unidirectional stream do SERVER chủ động mở tới mình — đây là kênh
+        // server dùng để đẩy op của người khác về real-time, không cần reload nữa.
+        (async () => {
+          const reader = transport.incomingUnidirectionalStreams.getReader();
+          while (true) {
+            const { done, value: stream } = await reader.read();
+            if (done) break;
+            const sReader = stream.getReader();
+            const chunks = [];
+            while (true) {
+              const { done: d, value } = await sReader.read();
+              if (d) break;
+              chunks.push(value);
+            }
+            const op = JSON.parse(
+              new TextDecoder().decode(concatChunks(chunks)),
+            );
+            applyOp(op);
           }
         })();
 
@@ -174,7 +224,7 @@
 
         await loadState();
 
-        // vẽ mới 
+        // --- 1. Vẽ mới ---
         document.getElementById("drawBtn").addEventListener("click", () => {
           const id = crypto.randomUUID().slice(0, 8);
           const x = 50 + Math.random() * 300;
@@ -184,7 +234,7 @@
           sendOp(id, "position", { x, y });
         });
 
-        // di chuyển (kéo thả) 
+        // --- 2. Di chuyển (kéo thả) ---
         canvas.addEventListener("mousedown", (e) => {
           const hit = Object.entries(elements).find(
             ([, el]) =>
@@ -209,7 +259,7 @@
           draggingId = null;
         });
 
-        // tô màu 
+        // --- 3. Tô màu (demo CRDT field-level: field "color" độc lập với field "position") ---
         document
           .querySelectorAll(".colors button[data-color]")
           .forEach((btn) => {
@@ -229,7 +279,7 @@
           .getElementById("reloadBtn")
           .addEventListener("click", loadState);
 
-        // datagram: gửi vị trí con trỏ, throttle nhẹ
+        // --- Datagram: gửi vị trí con trỏ, throttle nhẹ — KHÔNG liên quan tới Redis ---
         let lastSent = 0;
         let dgSentCount = 0,
           dgDroppedCount = 0;
@@ -240,7 +290,7 @@
           if (Date.now() - lastSent < 100) return;
           lastSent = Date.now();
 
-          // package loss simulator
+          // Mô phỏng mất gói: cố tình KHÔNG gửi — minh hoạ "mất vài gói vẫn ổn"
           if (
             document.getElementById("lossSim").checked &&
             Math.random() < 0.3

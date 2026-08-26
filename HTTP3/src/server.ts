@@ -18,16 +18,29 @@ const x509 = new X509Certificate(cert);
 const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
 console.log("Cert hash (dán vào client):", certHashBase64);
 
-const redis = createClient({
-  url: process.env.REDIS_URL ?? "redis://localhost:6379",
-});
+const redis = createClient();
 redis.on("error", (err) => console.error("Redis error:", err));
 await redis.connect();
 
 const ROOM_KEY = "board:demo-room";
+const roomSessions = new Set<any>(); // demo: 1 phòng cố định, nên chỉ cần 1 Set
 
-// write stream: nhận operation qua unidirectional stream, merge field-level, ghi Redis
-async function handleWriteStream(stream: ReadableStream<Uint8Array>) {
+async function broadcastStreamOp(payload: Buffer, exclude: any) {
+  for (const s of roomSessions) {
+    if (s === exclude) continue;
+    try {
+      const stream = await s.createUnidirectionalStream();
+      const writer = stream.getWriter();
+      await writer.write(payload);
+      await writer.close();
+    } catch {
+      // session có thể vừa đóng — bỏ qua, sẽ tự bị dọn khỏi registry
+    }
+  }
+}
+
+// ---- GHI: nhận operation qua unidirectional stream, merge field-level, ghi Redis ----
+async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: any) {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   while (true) {
@@ -35,22 +48,24 @@ async function handleWriteStream(stream: ReadableStream<Uint8Array>) {
     if (done) break;
     chunks.push(value);
   }
-  const op = JSON.parse(Buffer.concat(chunks).toString("utf-8"));
+  const rawBytes = Buffer.concat(chunks);
+  const op = JSON.parse(rawBytes.toString("utf-8"));
   const hashField = `${op.elementId}:${op.field}`;
 
   const existingRaw = await redis.hGet(ROOM_KEY, hashField);
   const existing = existingRaw ? JSON.parse(existingRaw) : null;
 
-  // merge crdt operation: LWW theo timestamp, field-levels
+  // CRDT merge tối giản: Last-Write-Wins theo timestamp, ở cấp FIELD (không phải cấp object)
   if (!existing || op.time[0] > existing.time[0]) {
     await redis.hSet(ROOM_KEY, hashField, JSON.stringify({ value: op.value, time: op.time }));
     console.log(`merged  ${hashField} =`, op.value);
+    await broadcastStreamOp(rawBytes, session); // đẩy cho các session khác trong phòng
   } else {
     console.log(`skipped ${hashField} (stale)`);
   }
 }
 
-// read: client gửi "GET_STATE" qua bidirectional stream, trả về toàn bộ board
+// ---- ĐỌC: client gửi "GET_STATE" qua bidirectional stream, trả về toàn bộ board ----
 async function handleReadStream(stream: {
   readable: ReadableStream<Uint8Array>;
   writable: WritableStream<Uint8Array>;
@@ -66,15 +81,20 @@ async function handleReadStream(stream: {
   await writer.close();
 }
 
-// datagram: cursor relay, không vào Redis
+// ---- DATAGRAM: cursor — relay cho các session KHÁC, KHÔNG chạm Redis ----
 async function handleDatagrams(session: any) {
   const reader = session.datagrams.readable.getReader();
-  const writer = session.datagrams.writable.getWriter();
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    // echo lại payload, vẽ "ghost cursor",
-    await writer.write(value);
+    // Relay cho các session khác trong phòng — giờ đã broadcast thật,
+    // không cần echo lại chính mình như "ghost cursor" tạm thời trước đó nữa.
+    for (const s of roomSessions) {
+      if (s === session) continue;
+      const w = s.datagrams.writable.getWriter();
+      w.write(value).catch(() => { });
+      w.releaseLock();
+    }
   }
 }
 
@@ -87,7 +107,11 @@ async function handleDatagrams(session: any) {
     if (done) break;
 
     await session.ready;
-    console.log("client connected");
+    console.log("client connected, total:", roomSessions.size + 1);
+    roomSessions.add(session);
+    session.closed
+      .then(() => roomSessions.delete(session))
+      .catch(() => roomSessions.delete(session));
 
     handleDatagrams(session);
 
@@ -96,7 +120,7 @@ async function handleDatagrams(session: any) {
       while (true) {
         const { done, value: s } = await uniReader.read();
         if (done) break;
-        handleWriteStream(s);
+        handleWriteStream(s, session);
       }
     })();
 
