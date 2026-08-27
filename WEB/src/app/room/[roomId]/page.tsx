@@ -1,5 +1,6 @@
 "use client";
 
+import check from "check-types";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Layer, Rect, Stage } from "react-konva";
 
@@ -72,7 +73,22 @@ export default function WhiteboardPage() {
       }
 
       try {
-        const transport = new WebTransport(`${process.env.NEXT_PUBLIC_HTTP3_URL}/wt`);
+        const transport = (() => {
+          if (process.env.NODE_ENV === "development" && check.string(process.env.NEXT_PUBLIC_CERT_HASH)) {
+            return new WebTransport(`${process.env.NEXT_PUBLIC_HTTP3_URL}/wt`, {
+              serverCertificateHashes: [
+                {
+                  algorithm: "sha-256",
+                  value: Uint8Array.from(atob(process.env.NEXT_PUBLIC_CERT_HASH), (c) => c.charCodeAt(0)),
+                },
+              ],
+            });
+          }
+          else {
+            return new WebTransport(`${process.env.NEXT_PUBLIC_HTTP3_URL}/wt`);
+          }
+
+        })();
         transportRef.current = transport;
 
         await transport.ready;

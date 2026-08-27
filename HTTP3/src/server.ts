@@ -3,28 +3,27 @@ import { readFileSync } from "fs";
 import { createHash, X509Certificate } from "crypto";
 import { createClient } from "redis";
 
-const cert = readFileSync("./cert.pem");
-const key = readFileSync("./key.pem");
-
-console.log(cert);
-console.log(key);
-
+const cert = readFileSync(process.env.HTTP3_CERT_FILE_PATH ?? "./cert.pem");
+const key = readFileSync(process.env.HTTP3_KEY_FILE_PATH ?? "./key.pem");
 
 const h3Server = new Http3Server({
-  port: 5000,
-  host: "0.0.0.0",
-  secret: "changeme",
+  port: process.env.PORT ?? 5000,
+  host: process.env.HTTP3_HOST ?? "localhost",
+  secret: process.env.HTTP3_SECRET ?? "changeme",
   cert,
   privKey: key,
 });
 
-const x509 = new X509Certificate(cert);
-const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
-console.log("Cert hash (dán vào client):", certHashBase64);
+if (process.env.NODE_ENV === "development") {
+  const x509 = new X509Certificate(cert);
+  const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
+  console.log("Cert hash (dán vào client):", certHashBase64);
+}
 
 const redis = createClient({
   url: process.env.REDIS_URL ?? "redis://localhost:6379",
 });
+
 redis.on("error", (err) => console.error("Redis error:", err));
 await redis.connect();
 
@@ -118,3 +117,4 @@ async function handleDatagrams(session: any) {
 })();
 
 h3Server.startServer();
+console.log(`Server started at port ${h3Server.port}`);
