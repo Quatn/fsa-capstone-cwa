@@ -78,7 +78,7 @@ export class AuthController {
   @Post('register')
   async register(
     @Body() form: RegisterDto,
-    @Res() res: Response,
+    @Res({ passthrough: true }) res: Response,
   ): Promise<ApiResponse<UserDetails>> {
     const { name, email, password } = form;
 

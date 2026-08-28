@@ -1,6 +1,5 @@
 import { HttpStatus, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { User } from './entity/user.entity';
 import { Repository } from 'typeorm';
 import { ApiError } from 'src/common/lib/errors/ApiError';
 import {
@@ -8,15 +7,17 @@ import {
   hashPassword,
 } from 'src/common/utils/password-hash-utils';
 import { UserAuthenticator, UserReader, UserWriter } from './user.contracts';
+import { UserDto, UserEntity } from './entity/user.entity';
+import { IBaseAppEntity } from 'src/common/entity/BaseAppEntity';
 
 @Injectable()
 export class UserService implements UserReader, UserWriter, UserAuthenticator {
   constructor(
-    @InjectRepository(User)
-    private usersRepository: Repository<User>,
+    @InjectRepository(UserEntity)
+    private usersRepository: Repository<UserEntity>,
   ) { }
 
-  async loginWithEmail(email: string, password: string): Promise<User> {
+  async loginWithEmail(email: string, password: string): Promise<UserEntity> {
     const user = await this.usersRepository.findOne({ where: { email } });
 
     if (!user) {
@@ -44,9 +45,9 @@ export class UserService implements UserReader, UserWriter, UserAuthenticator {
   }
 
   async createUser(
-    user: Omit<User, 'id' | 'passwordHash' | 'createdAt' | 'updatedAt'>,
+    user: Omit<UserDto, keyof IBaseAppEntity | 'passwordHash'>,
     password: string,
-  ): Promise<User> {
+  ): Promise<UserEntity> {
     const userExists = await this.usersRepository.findOne({
       where: { email: user.email },
     });
@@ -68,7 +69,7 @@ export class UserService implements UserReader, UserWriter, UserAuthenticator {
     });
   }
 
-  async findById(userId: string): Promise<User | null> {
+  async findById(userId: string): Promise<UserEntity | null> {
     const user = await this.usersRepository.findOne({
       where: { id: userId },
     });

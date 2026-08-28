@@ -1,18 +1,21 @@
 import { UserDetails } from 'src/common/dto/UserDetails';
-import { AuthSession } from './entity/auth-session.entity';
+import {
+  AuthSessionDto,
+  AuthSessionEntity,
+} from './entity/auth-session.entity';
 
 export interface AuthSessionValidator {
   authenticateUser(userId: string): Promise<{
-    authSession: AuthSession;
+    authSession: AuthSessionEntity;
     refreshToken: string;
   }>;
 
   verifyAndRefreshTokenAndAuthSession(
     refreshToken: string,
-  ): Promise<AuthSession>;
+  ): Promise<AuthSessionEntity>;
 
   refreshByAuthSession(
-    authSession: AuthSession,
+    authSession: AuthSessionDto,
   ): Promise<{ userDetails: UserDetails; accessToken: string }>;
 }
 

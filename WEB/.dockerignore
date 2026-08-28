@@ -17,6 +17,7 @@ node_modules
 *.iml
 *.ipr
 *.iws
+.notes.md
 
 # OS junk
 .DS_Store
