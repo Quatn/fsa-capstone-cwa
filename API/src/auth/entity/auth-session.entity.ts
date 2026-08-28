@@ -8,7 +8,7 @@ export type AuthSessionDto = IBaseAppEntity & {
   uuid: string;
   expiresAt: Date;
   revoked: boolean;
-  deviceInfo: string;
+  deviceInfo: string | null;
 };
 
 @Entity('auth-sessions')
@@ -31,7 +31,7 @@ export class AuthSessionEntity extends BaseAppEntity {
   revoked: boolean;
 
   @Column({ type: 'text', nullable: true })
-  deviceInfo: string;
+  deviceInfo: string | null;
 
   // RELATIONS
 
