@@ -117,4 +117,4 @@ async function handleDatagrams(session: any) {
 })();
 
 h3Server.startServer();
-console.log(`Server started at port ${h3Server.port}`);
+console.log(`Server started at port ${h3Server.port ?? process.env.PORT ?? 5000}`);

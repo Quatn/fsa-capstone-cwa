@@ -1,7 +1,10 @@
 import { AuthSessionEntity } from 'src/auth/entity/auth-session.entity';
 import { MAX_USERNAME_LENGTH } from 'src/common/constants';
-import { AllUserRoles, type UserRole } from 'src/common/dto/UserRoles';
 import { BaseAppEntity, IBaseAppEntity } from 'src/common/entity/BaseAppEntity';
+import {
+  AllUserRoles,
+  type UserRole,
+} from 'src/common/lib/types/dto/UserRoles';
 import { Column, Entity, OneToMany } from 'typeorm';
 
 export type UserDto = IBaseAppEntity & {

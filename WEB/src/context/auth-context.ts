@@ -1,4 +1,4 @@
-import { AuthState } from "@/types/AuthState";
+import { AuthState } from "@/lib/types/AuthState";
 import { DataHookObject } from "@/types/DataHookObject";
 import React from "react";
 

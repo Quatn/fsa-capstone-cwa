@@ -7,13 +7,13 @@ import { RefreshTokenPayload } from './types/RefreshToken';
 import { ApiError } from 'src/common/lib/errors/ApiError';
 import { compareToken, hashToken } from 'src/common/utils/token-hash-utils';
 import check from 'check-types';
-import { UserDetails } from 'src/common/dto/UserDetails';
 import { AuthSessionValidator } from './auth.contracts';
 import { USER_READER, type UserReader } from 'src/user/user.contracts';
 import {
   AuthSessionDto,
   AuthSessionEntity,
 } from './entity/auth-session.entity';
+import { type AuthState } from 'src/common/lib/types/AuthState';
 
 @Injectable()
 export class AuthService implements AuthSessionValidator {
@@ -149,9 +149,7 @@ export class AuthService implements AuthSessionValidator {
     }
   }
 
-  async refreshByAuthSession(
-    authSession: AuthSessionDto,
-  ): Promise<{ userDetails: UserDetails; accessToken: string }> {
+  async refreshByAuthSession(authSession: AuthSessionDto): Promise<AuthState> {
     const user = await this.userReader.findById(authSession.userId);
 
     if (!user) {

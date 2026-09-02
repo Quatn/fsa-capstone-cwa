@@ -1,4 +1,4 @@
-import { UserDetails } from 'src/common/dto/UserDetails';
+import { AuthState } from 'src/common/lib/types/AuthState';
 import {
   AuthSessionDto,
   AuthSessionEntity,
@@ -14,9 +14,7 @@ export interface AuthSessionValidator {
     refreshToken: string,
   ): Promise<AuthSessionEntity>;
 
-  refreshByAuthSession(
-    authSession: AuthSessionDto,
-  ): Promise<{ userDetails: UserDetails; accessToken: string }>;
+  refreshByAuthSession(authSession: AuthSessionDto): Promise<AuthState>;
 }
 
 export const AUTH_SESSION_VALIDATOR = Symbol('AUTH_SESSION_VALIDATOR');

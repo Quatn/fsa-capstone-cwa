@@ -10,7 +10,6 @@ import {
 } from '@nestjs/common';
 import { LoginDto } from './dto/LoginDto';
 import { ApiResponse } from 'src/common/lib/ApiResponse';
-import { UserDetails } from 'src/common/dto/UserDetails';
 import { successResponse } from 'src/common/utils/api-response-utils';
 import { EMAIL_REGEX } from 'src/common/lib/regex/email.regex';
 import { type Request, type Response } from 'express';
@@ -28,6 +27,8 @@ import {
   type UserAuthenticator,
   type UserWriter,
 } from 'src/user/user.contracts';
+import { AuthState } from 'src/common/lib/types/AuthState';
+import { UserDetails } from 'src/common/lib/types/dto/UserDetails';
 
 @Controller('auth')
 export class AuthController {
@@ -102,9 +103,7 @@ export class AuthController {
   }
 
   @Get('refresh')
-  async refresh(
-    @Req() req: Request,
-  ): Promise<ApiResponse<{ userDetails: UserDetails; accessToken: string }>> {
+  async refresh(@Req() req: Request): Promise<ApiResponse<AuthState>> {
     const { [REFRESH_TOKEN_COOKIE_NAME]: refreshToken } = req.cookies as {
       [REFRESH_TOKEN_COOKIE_NAME]?: string;
     };
