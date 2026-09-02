@@ -1,6 +1,6 @@
 import { ApiResponse } from "@/lib/ApiResponse";
 import api from "../api";
-import { UserDetails } from "@/types/dto/UserDetails";
+import { UserDetails } from "@/lib/types/dto/UserDetails";
 
 export const refreshSession = async (): Promise<ApiResponse<{
   userDetails: UserDetails,

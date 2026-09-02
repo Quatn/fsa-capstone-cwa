@@ -1,7 +1,7 @@
 export const AllUserRoles = [
-  "Admin",
-  "User",
-  "Guest",
+  "admin",
+  "user",
+  "guest",
 ] as const;
 
 export type UserRole = typeof AllUserRoles[number];

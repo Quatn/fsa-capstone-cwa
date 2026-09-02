@@ -1,5 +1,4 @@
 import { HttpStatus, Inject, Injectable } from '@nestjs/common';
-import { AuthSession } from './entity/auth-session.entity';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { JwtService } from '@nestjs/jwt';
@@ -8,9 +7,13 @@ import { RefreshTokenPayload } from './types/RefreshToken';
 import { ApiError } from 'src/common/lib/errors/ApiError';
 import { compareToken, hashToken } from 'src/common/utils/token-hash-utils';
 import check from 'check-types';
-import { UserDetails } from 'src/common/dto/UserDetails';
 import { AuthSessionValidator } from './auth.contracts';
 import { USER_READER, type UserReader } from 'src/user/user.contracts';
+import {
+  AuthSessionDto,
+  AuthSessionEntity,
+} from './entity/auth-session.entity';
+import { type AuthState } from 'src/common/lib/types/AuthState';
 
 @Injectable()
 export class AuthService implements AuthSessionValidator {
@@ -18,8 +21,8 @@ export class AuthService implements AuthSessionValidator {
   private readonly accessTokenExpirationSeconds: number;
 
   constructor(
-    @InjectRepository(AuthSession)
-    private authSessionsRepository: Repository<AuthSession>,
+    @InjectRepository(AuthSessionEntity)
+    private authSessionsRepository: Repository<AuthSessionEntity>,
     private jwtService: JwtService,
     @Inject(USER_READER)
     private readonly userReader: UserReader,
@@ -55,8 +58,8 @@ export class AuthService implements AuthSessionValidator {
     tokenHash: string,
     expiresAt: Date,
     deviceInfo: string,
-  ): Promise<AuthSession> {
-    const authSession = new AuthSession();
+  ): Promise<AuthSessionEntity> {
+    const authSession = new AuthSessionEntity();
     authSession.userId = userId;
     authSession.uuid = uuid;
     authSession.tokenHash = tokenHash;
@@ -70,7 +73,7 @@ export class AuthService implements AuthSessionValidator {
   }
 
   async authenticateUser(userId: string): Promise<{
-    authSession: AuthSession;
+    authSession: AuthSessionEntity;
     refreshToken: string;
   }> {
     const now = new Date();
@@ -103,7 +106,7 @@ export class AuthService implements AuthSessionValidator {
 
   async verifyAndRefreshTokenAndAuthSession(
     refreshToken: string,
-  ): Promise<AuthSession> {
+  ): Promise<AuthSessionEntity> {
     try {
       const { uuid } =
         await this.jwtService.verifyAsync<RefreshTokenPayload>(refreshToken);
@@ -146,9 +149,7 @@ export class AuthService implements AuthSessionValidator {
     }
   }
 
-  async refreshByAuthSession(
-    authSession: AuthSession,
-  ): Promise<{ userDetails: UserDetails; accessToken: string }> {
+  async refreshByAuthSession(authSession: AuthSessionDto): Promise<AuthState> {
     const user = await this.userReader.findById(authSession.userId);
 
     if (!user) {
