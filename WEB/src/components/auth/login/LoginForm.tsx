@@ -1,6 +1,6 @@
 "use client"
 
-import { login } from "@/services/api/slice/auth"
+import { useLoginMutation } from "@/services/client/slice/auth.slice"
 import parseApiErrorValue from "@/utils/parseErrorValues"
 import { useRouter } from "next/navigation"
 import { SubmitHandler, useForm } from "react-hook-form"
@@ -21,41 +21,45 @@ export const LoginForm = () => {
   } = useForm<LoginFormInputs>()
   const router = useRouter();
 
+  const [login] = useLoginMutation();
+
   const onSubmit: SubmitHandler<LoginFormInputs> = async (data) => {
     try {
-      const response = await login(data.loginKey, data.password);
-      if (response.success) {
+      const reduxResponse = await login(data);
+      const { data: response } = reduxResponse;
+      if (response?.success) {
         toast.success(`Login successful as ${response.data.name}`);
         router.push("/");
       }
       else {
-        toast.warn("Login unsuccessful");
+        const errorValue = parseApiErrorValue(reduxResponse.error);
+        if (errorValue) {
+          switch (errorValue) {
+            case "ERR_INVALID_CREDENTIALS":
+              toast.error("Invalid credentials");
+              break;
+            case "ERR_USER_NOT_FOUND":
+              toast.error("User not found");
+              break;
+            case "ERR_INVALID_PASSWORD":
+              toast.error("Invalid password");
+              break;
+            case "ERR_VALIDATION_FAILED":
+              toast.error("Invalid login key or password");
+              break;
+            default:
+              toast.error("Unknown error");
+              break;
+          }
+        }
+        else {
+          toast.error("Unknown error");
+        }
       }
     }
     catch (error) {
-      const errorValue = parseApiErrorValue(error);
-      if (errorValue) {
-        switch (errorValue) {
-          case "ERR_INVALID_CREDENTIALS":
-            toast.error("Invalid credentials");
-            break;
-          case "ERR_USER_NOT_FOUND":
-            toast.error("User not found");
-            break;
-          case "ERR_INVALID_PASSWORD":
-            toast.error("Invalid password");
-            break;
-          case "ERR_VALIDATION_FAILED":
-            toast.error("Invalid login key or password");
-            break;
-          default:
-            toast.error("Unknown error");
-            break;
-        }
-      }
-      else {
-        toast.error("Unknown error");
-      }
+      console.error(error);
+      toast.error("Unknown error");
     }
   }
 

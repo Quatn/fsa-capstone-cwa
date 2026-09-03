@@ -1,5 +1,6 @@
-import { AuthState } from "@/lib/types/AuthState";
-import { DataHookObject } from "@/types/DataHookObject";
+"use client";
+
+import { UserDetails } from "@/lib/types/dto/UserDetails";
 import React from "react";
 
 type State = {
@@ -11,7 +12,7 @@ type Action =
   ;
 
 type Data = {
-  authState?: DataHookObject<AuthState> | null;
+  userDetails?: UserDetails | null;
 };
 
 const initialState: State = {
