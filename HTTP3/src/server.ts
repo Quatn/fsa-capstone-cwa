@@ -1,15 +1,16 @@
-import { Http3Server } from "@fails-components/webtransport";
+import { Http3Server, type WebTransportSession, type WebTransportDuplexStream } from "@fails-components/webtransport";
 import { readFileSync } from "fs";
 import { createHash, X509Certificate } from "crypto";
 import { createClient } from "redis";
+import { ELEMENT_TYPES, parseOp, type Op } from "./types.js";
 
-const cert = readFileSync("./cert.pem");
-const key = readFileSync("./key.pem");
+const cert = readFileSync(process.env.HTTP3_CERT_FILE_PATH ?? "./cert.pem");
+const key = readFileSync(process.env.HTTP3_KEY_FILE_PATH ?? "./key.pem");
 
 const h3Server = new Http3Server({
-  port: 5000,
-  host: "0.0.0.0",
-  secret: "changeme",
+  port: Number(process.env.PORT ?? 5000),
+  host: process.env.HTTP3_HOST ?? "0.0.0.0",
+  secret: process.env.HTTP3_SECRET ?? "changeme",
   cert,
   privKey: key,
 });
@@ -18,14 +19,39 @@ const x509 = new X509Certificate(cert);
 const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
 console.log("Cert hash (dán vào client):", certHashBase64);
 
-const redis = createClient();
+const redis = createClient({
+  url: process.env.REDIS_URL ?? "redis://localhost:6379",
+});
+
 redis.on("error", (err) => console.error("Redis error:", err));
 await redis.connect();
 
 const ROOM_KEY = "board:demo-room";
-const roomSessions = new Set<any>(); // demo: 1 phòng cố định, nên chỉ cần 1 Set
+const roomSessions = new Set<WebTransportSession>(); // demo: 1 phòng cố định, nên chỉ cần 1 Set
 
-async function broadcastStreamOp(payload: Buffer, exclude: any) {
+/** Shape actually stored in the Redis hash for every `elementId:field` entry. */
+interface StoredField {
+  value: unknown;
+  time: [number, string];
+}
+
+function parseStoredField(raw: string): StoredField | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null) return null;
+  const p = parsed as Record<string, unknown>;
+  const t = p.time;
+  if (!Array.isArray(t) || t.length !== 2 || typeof t[0] !== "number" || typeof t[1] !== "string") {
+    return null;
+  }
+  return { value: p.value, time: [t[0], t[1]] };
+}
+
+async function broadcastStreamOp(payload: Uint8Array, exclude: WebTransportSession): Promise<void> {
   for (const s of roomSessions) {
     if (s === exclude) continue;
     try {
@@ -34,13 +60,13 @@ async function broadcastStreamOp(payload: Buffer, exclude: any) {
       await writer.write(payload);
       await writer.close();
     } catch {
-      // session có thể vừa đóng — bỏ qua, sẽ tự bị dọn khỏi registry
+      // session có thể vừa đóng — bỏ qua, sẽ tự bị dọn khỏi registry qua session.closed
     }
   }
 }
 
-// ---- GHI: nhận operation qua unidirectional stream, merge field-level, ghi Redis ----
-async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: any) {
+// ---- GHI: nhận operation qua unidirectional stream, merge field-level, ghi Redis, broadcast ----
+async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: WebTransportSession): Promise<void> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   while (true) {
@@ -49,31 +75,54 @@ async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: an
     chunks.push(value);
   }
   const rawBytes = Buffer.concat(chunks);
-  const op = JSON.parse(rawBytes.toString("utf-8"));
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawBytes.toString("utf-8"));
+  } catch {
+    console.log("dropped: invalid JSON");
+    return;
+  }
+
+  const op: Op | null = parseOp(raw);
+  if (!op) {
+    console.log("dropped: invalid op", raw);
+    return;
+  }
+
   const hashField = `${op.elementId}:${op.field}`;
 
   const existingRaw = await redis.hGet(ROOM_KEY, hashField);
-  const existing = existingRaw ? JSON.parse(existingRaw) : null;
+  const existing = existingRaw ? parseStoredField(existingRaw) : null;
 
   // CRDT merge tối giản: Last-Write-Wins theo timestamp, ở cấp FIELD (không phải cấp object)
+  // "points" (nét vẽ tự do / line) cũng chỉ là 1 field như "position"/"strokeColor" — không cần xử lý riêng
   if (!existing || op.time[0] > existing.time[0]) {
-    await redis.hSet(ROOM_KEY, hashField, JSON.stringify({ value: op.value, time: op.time }));
-    console.log(`merged  ${hashField} =`, op.value);
-    await broadcastStreamOp(rawBytes, session); // đẩy cho các session khác trong phòng
+    const stored: StoredField = { value: op.value, time: op.time };
+    await redis.hSet(ROOM_KEY, hashField, JSON.stringify(stored));
+
+    // "type" là bất biến — set 1 lần khi phần tử được tạo, để GET_STATE có
+    // thể suy ra type mà không cần quét toàn bộ field. Không áp dụng cho
+    // DeleteOp vì nó không gắn với 1 type cụ thể.
+    if (op.field !== "deleted") {
+      const typeField = `${op.elementId}:__type`;
+      const storedType: StoredField = { value: op.type, time: op.time };
+      await redis.hSetNX(ROOM_KEY, typeField, JSON.stringify(storedType));
+    }
+
+    console.log(`merged  ${hashField}`);
+    await broadcastStreamOp(rawBytes, session); // đẩy real-time cho các session khác trong phòng
   } else {
     console.log(`skipped ${hashField} (stale)`);
   }
 }
 
 // ---- ĐỌC: client gửi "GET_STATE" qua bidirectional stream, trả về toàn bộ board ----
-async function handleReadStream(stream: {
-  readable: ReadableStream<Uint8Array>;
-  writable: WritableStream<Uint8Array>;
-}) {
+async function handleReadStream(stream: WebTransportDuplexStream): Promise<void> {
   const reader = stream.readable.getReader();
   const writer = stream.writable.getWriter();
   const { value } = await reader.read();
-  if (new TextDecoder().decode(value) === "GET_STATE") {
+  if (value && new TextDecoder().decode(value) === "GET_STATE") {
     const all = await redis.hGetAll(ROOM_KEY);
     await writer.write(new TextEncoder().encode(JSON.stringify(all)));
     console.log(`sent state (${Object.keys(all).length} fields)`);
@@ -81,14 +130,14 @@ async function handleReadStream(stream: {
   await writer.close();
 }
 
-// ---- DATAGRAM: cursor — relay cho các session KHÁC, KHÔNG chạm Redis ----
-async function handleDatagrams(session: any) {
+// ---- DATAGRAM: cursor + draft (nét nháp) — relay cho các session KHÁC trong
+// phòng, KHÔNG chạm Redis. Server không cần biết type "cursor" hay "draft",
+// chỉ forward nguyên xi byte nhận được — client tự phân loại theo payload. ----
+async function handleDatagrams(session: WebTransportSession): Promise<void> {
   const reader = session.datagrams.readable.getReader();
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    // Relay cho các session khác trong phòng — giờ đã broadcast thật,
-    // không cần echo lại chính mình như "ghost cursor" tạm thời trước đó nữa.
     for (const s of roomSessions) {
       if (s === session) continue;
       const w = s.datagrams.writable.getWriter();
@@ -99,7 +148,7 @@ async function handleDatagrams(session: any) {
 }
 
 (async () => {
-  const sessionStream = await h3Server.sessionStream("/wt");
+  const sessionStream = h3Server.sessionStream("/wt");
   const sessionReader = sessionStream.getReader();
 
   while (true) {
@@ -113,26 +162,28 @@ async function handleDatagrams(session: any) {
       .then(() => roomSessions.delete(session))
       .catch(() => roomSessions.delete(session));
 
-    handleDatagrams(session);
+    handleDatagrams(session).catch((err) => console.error("datagram loop error:", err));
 
     const uniReader = session.incomingUnidirectionalStreams.getReader();
     (async () => {
       while (true) {
         const { done, value: s } = await uniReader.read();
         if (done) break;
-        handleWriteStream(s, session);
+        handleWriteStream(s, session).catch((err) => console.error("write stream error:", err));
       }
-    })();
+    })().catch((err) => console.error("uni stream loop error:", err));
 
     const bidiReader = session.incomingBidirectionalStreams.getReader();
     (async () => {
       while (true) {
         const { done, value: s } = await bidiReader.read();
         if (done) break;
-        handleReadStream(s);
+        handleReadStream(s).catch((err) => console.error("read stream error:", err));
       }
-    })();
+    })().catch((err) => console.error("bidi stream loop error:", err));
   }
 })();
 
 h3Server.startServer();
+console.log(`Server started at port ${h3Server.port ?? process.env.PORT ?? 5000}`);
+console.log("Element types supported:", ELEMENT_TYPES.join(", "));
