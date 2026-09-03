@@ -15,9 +15,11 @@ const h3Server = new Http3Server({
   privKey: key,
 });
 
-const x509 = new X509Certificate(cert);
-const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
-console.log("Cert hash (dán vào client):", certHashBase64);
+if (process.env.NODE_ENV === "development") {
+  const x509 = new X509Certificate(cert);
+  const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
+  console.log("Cert hash (dán vào client):", certHashBase64);
+}
 
 const redis = createClient({
   url: process.env.REDIS_URL ?? "redis://localhost:6379",

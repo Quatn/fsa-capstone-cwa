@@ -62,8 +62,6 @@ ENV NODE_ENV=production
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY --from=builder --chown=node:node /app/dist ./dist
-COPY --from=builder --chown=node:node /app/cert.pem ./cert.pem
-COPY --from=builder --chown=node:node /app/key.pem ./key.pem
 
 USER node
 
