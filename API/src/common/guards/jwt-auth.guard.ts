@@ -8,6 +8,7 @@ import { JwtService } from '@nestjs/jwt';
 import { Request } from 'express';
 import { AccessTokenPayload } from 'src/auth/types/AccessToken';
 import { ApiError } from '../lib/errors/ApiError';
+import { AuthenticatedRequest } from '../interfaces/authenticated-request.interface';
 
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
@@ -27,7 +28,9 @@ export class JwtAuthGuard implements CanActivate {
       const payload =
         await this.jwtService.verifyAsync<AccessTokenPayload>(token);
 
-      request['userId'] = payload.userId;
+      const authenticatedRequest = request as AuthenticatedRequest;
+
+      authenticatedRequest.participantId = payload.participantId;
     } catch {
       throw new ApiError(
         'Invalid token',

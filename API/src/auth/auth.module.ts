@@ -7,6 +7,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { AUTH_SESSION_VALIDATOR } from './auth.contracts';
 import { AuthSessionEntity } from './entity/auth-session.entity';
+import { RoomModule } from 'src/room/room.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { AuthSessionEntity } from './entity/auth-session.entity';
       },
     }),
     UserModule,
+    RoomModule,
   ],
   controllers: [AuthController],
   providers: [

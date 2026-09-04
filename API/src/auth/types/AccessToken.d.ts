@@ -1,3 +1,3 @@
 export type AccessTokenPayload = {
-  userId: number;
+  participantId: string;
 };

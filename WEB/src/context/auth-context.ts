@@ -13,6 +13,7 @@ type Action =
 
 type Data = {
   userDetails?: UserDetails | null;
+  guestName?: string | null;
 };
 
 const initialState: State = {

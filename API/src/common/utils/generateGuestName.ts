@@ -1,0 +1,70 @@
+const adjectives = [
+  'Amber',
+  'Azure',
+  'Blue',
+  'Bold',
+  'Bright',
+  'Calm',
+  'Clever',
+  'Coral',
+  'Crimson',
+  'Curious',
+  'Golden',
+  'Green',
+  'Happy',
+  'Indigo',
+  'Jolly',
+  'Kind',
+  'Lucky',
+  'Mighty',
+  'Orange',
+  'Pink',
+  'Purple',
+  'Quiet',
+  'Red',
+  'Silver',
+  'Sunny',
+  'Teal',
+  'Violet',
+  'Warm',
+  'White',
+  'Yellow',
+] as const;
+
+const animals = [
+  'Badger',
+  'Bear',
+  'Beaver',
+  'Cat',
+  'Cheetah',
+  'Dolphin',
+  'Eagle',
+  'Elephant',
+  'Falcon',
+  'Fox',
+  'Giraffe',
+  'Hedgehog',
+  'Koala',
+  'Lion',
+  'Lynx',
+  'Otter',
+  'Owl',
+  'Panda',
+  'Penguin',
+  'Rabbit',
+  'Raccoon',
+  'Shark',
+  'Tiger',
+  'Turtle',
+  'Walrus',
+  'Wolf',
+  'Zebra',
+] as const;
+
+function randomItem<T>(items: readonly T[]): T {
+  return items[Math.floor(Math.random() * items.length)];
+}
+
+export function generateGuestName(): string {
+  return `${randomItem(adjectives)} ${randomItem(animals)}`;
+}

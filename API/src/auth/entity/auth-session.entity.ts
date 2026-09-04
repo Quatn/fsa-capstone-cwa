@@ -1,9 +1,9 @@
 import { BaseAppEntity, IBaseAppEntity } from 'src/common/entity/BaseAppEntity';
-import { UserEntity } from 'src/user/entity/user.entity';
+import { ParticipantEntity } from 'src/room/entity/participant.entity';
 import { Column, Entity, JoinColumn, ManyToOne } from 'typeorm';
 
 export type AuthSessionDto = IBaseAppEntity & {
-  userId: string;
+  participantId: string;
   tokenHash: string;
   uuid: string;
   expiresAt: Date;
@@ -16,7 +16,7 @@ export class AuthSessionEntity extends BaseAppEntity {
   // COLUMNS
 
   @Column({ type: 'uuid' })
-  userId: string;
+  participantId: string;
 
   @Column({ length: 255 })
   tokenHash: string;
@@ -35,18 +35,22 @@ export class AuthSessionEntity extends BaseAppEntity {
 
   // RELATIONS
 
-  @ManyToOne(() => UserEntity, (user) => user.authSessions, {
-    onDelete: 'CASCADE',
-  })
-  @JoinColumn({ name: 'userId' })
-  user: UserEntity;
+  @ManyToOne(
+    () => ParticipantEntity,
+    (participant) => participant.authSessions,
+    {
+      onDelete: 'CASCADE',
+    },
+  )
+  @JoinColumn({ name: 'participantId' })
+  participant: ParticipantEntity;
 
   // UTILS
 
   toDto(): AuthSessionDto {
     return {
       id: this.id,
-      userId: this.userId,
+      participantId: this.participantId,
       tokenHash: this.tokenHash,
       uuid: this.uuid,
       expiresAt: this.expiresAt,

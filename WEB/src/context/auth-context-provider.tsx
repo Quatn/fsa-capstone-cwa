@@ -10,19 +10,26 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
 
   const { data: refreshSessionResponse } = useRefreshSessionQuery();
 
-  const userDetails = useMemo(() => {
+  const { userDetails, guestName } = useMemo(() => {
     if (!!refreshSessionResponse && refreshSessionResponse.success === true) {
       accessTokenStore.set(refreshSessionResponse.data.accessToken);
-      return refreshSessionResponse.data.userDetails;
+      return {
+        userDetails: refreshSessionResponse.data.userDetails,
+        guestName: refreshSessionResponse.data.guestName
+      }
+        ;
     }
     else {
       console.log("User is not authenticated");
-      return null;
+      return {
+        userDetails: null,
+        guestName: null
+      };
     }
   }, [refreshSessionResponse]);
 
   return (
-    <AuthContextBundle.StateProvider value={{ state, data: { userDetails } }}>
+    <AuthContextBundle.StateProvider value={{ state, data: { userDetails, guestName } }}>
       <AuthContextBundle.DispatchProvider value={dispatch}>
         {children}
       </AuthContextBundle.DispatchProvider>
