@@ -11,6 +11,7 @@ import { RoomModule } from 'src/room/room.module';
 
 @Module({
   imports: [
+    ConfigModule,
     TypeOrmModule.forFeature([AuthSessionEntity]),
     JwtModule.registerAsync({
       imports: [ConfigModule],

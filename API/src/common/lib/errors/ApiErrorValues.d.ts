@@ -2,7 +2,8 @@ export type ServerErrorValues = 'ERR_UNABLE_TO_CONNECT_DB';
 
 export type ValidationErrorValues = 'ERR_VALIDATION_FAILED';
 
-export type ApiControllerErrorValues = 'ERR_RESOURCE_NOT_FOUND';
+export type ApiControllerErrorValues =
+  'ERR_RESOURCE_NOT_FOUND' | 'ERR_ROOM_NOT_FOUND';
 
 export type AuthApiErrorValues =
   | 'ERR_REFRESH_TOKEN_NOT_FOUND'

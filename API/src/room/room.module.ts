@@ -3,10 +3,26 @@ import { RoomController } from './room.controller';
 import { RoomService } from './room.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ParticipantEntity } from './entity/participant.entity';
-import { PARTICIPANT_READER, PARTICIPANT_WRITER } from './room.contracts';
+import {
+  PARTICIPANT_READER,
+  PARTICIPANT_WRITER,
+  ROOM_MANAGER,
+  ROOM_READER,
+  ROOM_WRITER,
+} from './room.contracts';
+import { RedisModule } from 'src/redis/redis.module';
+import { RoomEntity } from './entity/room.entity';
+import { BoardElementEntity } from './entity/board-element.entity';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([ParticipantEntity])],
+  imports: [
+    TypeOrmModule.forFeature([
+      ParticipantEntity,
+      RoomEntity,
+      BoardElementEntity,
+    ]),
+    RedisModule,
+  ],
   controllers: [RoomController],
   providers: [
     RoomService,
@@ -16,6 +32,18 @@ import { PARTICIPANT_READER, PARTICIPANT_WRITER } from './room.contracts';
     },
     {
       provide: PARTICIPANT_WRITER,
+      useExisting: RoomService,
+    },
+    {
+      provide: ROOM_READER,
+      useExisting: RoomService,
+    },
+    {
+      provide: ROOM_WRITER,
+      useExisting: RoomService,
+    },
+    {
+      provide: ROOM_MANAGER,
       useExisting: RoomService,
     },
   ],

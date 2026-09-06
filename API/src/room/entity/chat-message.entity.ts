@@ -28,7 +28,7 @@ export class ChatMessageEntity extends BaseAppEntity {
 
   // RELATIONS
 
-  @ManyToOne(() => RoomEntity, (room) => room.boardElements, {
+  @ManyToOne(() => RoomEntity, (room) => room.chatMessages, {
     onDelete: 'CASCADE',
   })
   @JoinColumn({ name: 'roomId' })

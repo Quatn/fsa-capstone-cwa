@@ -85,6 +85,8 @@ export class AuthController {
 
       res.cookie(REFRESH_TOKEN_COOKIE_NAME, refreshToken);
 
+      res.status(200);
+
       return successResponse('Login successful', {
         id: user.id,
         name: user.name,
@@ -154,6 +156,11 @@ export class AuthController {
           );
         const authState =
           await this.authSessionValidator.refreshByAuthSession(authSession);
+
+        await this.participantWriter.setParticipantLastAccessIp(
+          authSession.participant.id,
+          req.ip ?? 'unknown',
+        );
 
         return successResponse(
           'Authenticated as existing participant',

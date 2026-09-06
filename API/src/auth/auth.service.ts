@@ -6,7 +6,6 @@ import { randomUUID } from 'crypto';
 import { RefreshTokenPayload } from './types/RefreshToken';
 import { ApiError } from 'src/common/lib/errors/ApiError';
 import { compareToken, hashToken } from 'src/common/utils/token-hash-utils';
-import check from 'check-types';
 import { AuthSessionValidator } from './auth.contracts';
 import { USER_READER, type UserReader } from 'src/user/user.contracts';
 import {
@@ -18,6 +17,7 @@ import {
   PARTICIPANT_READER,
   type ParticipantReader,
 } from 'src/room/room.contracts';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class AuthService implements AuthSessionValidator {
@@ -25,6 +25,7 @@ export class AuthService implements AuthSessionValidator {
   private readonly accessTokenExpirationSeconds: number;
 
   constructor(
+    private readonly config: ConfigService,
     @InjectRepository(AuthSessionEntity)
     private authSessionsRepository: Repository<AuthSessionEntity>,
     private jwtService: JwtService,
@@ -33,28 +34,14 @@ export class AuthService implements AuthSessionValidator {
     @Inject(PARTICIPANT_READER)
     private readonly participantReader: ParticipantReader,
   ) {
-    const refreshTokenExpirationSeconds = parseInt(
-      process.env.REFRESH_TOKEN_EXPIRATION_SECONDS ?? '',
+    const refreshTokenExpirationSeconds = this.config.getOrThrow<number>(
+      'REFRESH_TOKEN_EXPIRATION_SECONDS',
     );
-
-    if (!check.number(refreshTokenExpirationSeconds)) {
-      throw new Error(
-        'REFRESH_TOKEN_EXPIRATION_SECONDS environment variable is not set or is not valid',
-      );
-    }
-
     this.refreshTokenExpirationSeconds = refreshTokenExpirationSeconds;
 
-    const accessTokenExpirationSeconds = parseInt(
-      process.env.ACCESS_TOKEN_EXPIRATION_SECONDS ?? '',
+    const accessTokenExpirationSeconds = this.config.getOrThrow<number>(
+      'ACCESS_TOKEN_EXPIRATION_SECONDS',
     );
-
-    if (!check.number(accessTokenExpirationSeconds)) {
-      throw new Error(
-        'ACCESS_TOKEN_EXPIRATION_SECONDS environment variable is not set or is not valid',
-      );
-    }
-
     this.accessTokenExpirationSeconds = accessTokenExpirationSeconds;
   }
 
@@ -119,6 +106,9 @@ export class AuthService implements AuthSessionValidator {
 
       const authSession = await this.authSessionsRepository.findOne({
         where: { uuid },
+        relations: {
+          participant: true,
+        },
       });
 
       if (!authSession) {
@@ -156,7 +146,7 @@ export class AuthService implements AuthSessionValidator {
   }
 
   async refreshByAuthSession(authSession: AuthSessionDto): Promise<AuthState> {
-    const participant = await this.participantReader.findById(
+    const participant = await this.participantReader.findParticipantById(
       authSession.participantId,
     );
 
