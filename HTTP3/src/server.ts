@@ -1,4 +1,9 @@
-import { Http3Server, type WebTransportSession, type WebTransportDuplexStream } from "@fails-components/webtransport";
+// `@fails-components/webtransport` ships no published TS types yet. Rather
+// than lock in a hand-written shape now (which would need to be deleted by
+// hand the moment real types are published), the session/stream objects it
+// hands us are left as `any` below — everything else in this file (Op
+// parsing, Redis storage) stays fully typed.
+import { Http3Server } from "@fails-components/webtransport";
 import { readFileSync } from "fs";
 import { createHash, X509Certificate } from "crypto";
 import { createClient } from "redis";
@@ -15,11 +20,9 @@ const h3Server = new Http3Server({
   privKey: key,
 });
 
-if (process.env.NODE_ENV === "development") {
-  const x509 = new X509Certificate(cert);
-  const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
-  console.log("Cert hash (dán vào client):", certHashBase64);
-}
+const x509 = new X509Certificate(cert);
+const certHashBase64 = createHash("sha256").update(x509.raw).digest("base64");
+console.log("Cert hash (dán vào client):", certHashBase64);
 
 const redis = createClient({
   url: process.env.REDIS_URL ?? "redis://localhost:6379",
@@ -29,7 +32,7 @@ redis.on("error", (err) => console.error("Redis error:", err));
 await redis.connect();
 
 const ROOM_KEY = "board:demo-room";
-const roomSessions = new Set<WebTransportSession>(); // demo: 1 phòng cố định, nên chỉ cần 1 Set
+const roomSessions = new Set<any>(); // demo: 1 phòng cố định, nên chỉ cần 1 Set
 
 /** Shape actually stored in the Redis hash for every `elementId:field` entry. */
 interface StoredField {
@@ -53,7 +56,7 @@ function parseStoredField(raw: string): StoredField | null {
   return { value: p.value, time: [t[0], t[1]] };
 }
 
-async function broadcastStreamOp(payload: Uint8Array, exclude: WebTransportSession): Promise<void> {
+async function broadcastStreamOp(payload: Uint8Array, exclude: any): Promise<void> {
   for (const s of roomSessions) {
     if (s === exclude) continue;
     try {
@@ -68,7 +71,7 @@ async function broadcastStreamOp(payload: Uint8Array, exclude: WebTransportSessi
 }
 
 // ---- GHI: nhận operation qua unidirectional stream, merge field-level, ghi Redis, broadcast ----
-async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: WebTransportSession): Promise<void> {
+async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: any): Promise<void> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
   while (true) {
@@ -120,7 +123,7 @@ async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: We
 }
 
 // ---- ĐỌC: client gửi "GET_STATE" qua bidirectional stream, trả về toàn bộ board ----
-async function handleReadStream(stream: WebTransportDuplexStream): Promise<void> {
+async function handleReadStream(stream: any): Promise<void> {
   const reader = stream.readable.getReader();
   const writer = stream.writable.getWriter();
   const { value } = await reader.read();
@@ -135,7 +138,7 @@ async function handleReadStream(stream: WebTransportDuplexStream): Promise<void>
 // ---- DATAGRAM: cursor + draft (nét nháp) — relay cho các session KHÁC trong
 // phòng, KHÔNG chạm Redis. Server không cần biết type "cursor" hay "draft",
 // chỉ forward nguyên xi byte nhận được — client tự phân loại theo payload. ----
-async function handleDatagrams(session: WebTransportSession): Promise<void> {
+async function handleDatagrams(session: any): Promise<void> {
   const reader = session.datagrams.readable.getReader();
   while (true) {
     const { done, value } = await reader.read();

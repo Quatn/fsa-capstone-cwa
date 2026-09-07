@@ -50,7 +50,8 @@ export interface LinearData {
 }
 
 export interface TextData {
-  position: Point; // top-left of the text block
+  position: Point; // top-left of the text box
+  size: Size; // box the text wraps within — chosen by dragging, like a shape
   text: string;
   color: string;
   fontSize: number; // px
@@ -73,7 +74,7 @@ export const FIELDS_BY_TYPE: { [T in ElementType]: readonly (keyof BoardElementD
   ellipse: ["position", "size", "strokeColor", "backgroundColor"],
   line: ["points", "strokeColor"],
   freedraw: ["points", "strokeColor"],
-  text: ["position", "text", "color", "fontSize"],
+  text: ["position", "size", "text", "color", "fontSize"],
 };
 
 /**

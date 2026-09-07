@@ -25,6 +25,11 @@
         color: #fff;
         border-color: #1f2937;
       }
+      .fontsizes button.active {
+        background: #1f2937;
+        color: #fff;
+        border-color: #1f2937;
+      }
       .colors button {
         width: 28px;
         height: 28px;
@@ -57,13 +62,20 @@
         <button data-color="#22c55e" style="background: #22c55e"></button>
         <button data-color="#eab308" style="background: #eab308"></button>
       </span>
+      &nbsp;·&nbsp; Cỡ chữ (textbox):
+      <span class="fontsizes">
+        <button data-fontsize="14">14</button>
+        <button data-fontsize="18" class="active">18</button>
+        <button data-fontsize="24">24</button>
+        <button data-fontsize="32">32</button>
+      </span>
     </p>
     <p style="color: #666; font-size: 14px">
-      Chọn công cụ ở trên · kéo thả để vẽ hình/đường thẳng/nét tự do · bấm để
-      đặt textbox · dùng công cụ "Chọn" để di chuyển hoặc tô lại màu · phím
+      Chọn công cụ ở trên · kéo thả để vẽ hình/đường thẳng/nét tự do/textbox ·
+      dùng công cụ "Chọn" để di chuyển hoặc tô lại màu/cỡ chữ · phím
       Delete/Backspace để xoá phần tử đang chọn
     </p>
-    <canvas id="board" width="700" height="500"></canvas>
+    <canvas id="board" width="500" height="350"></canvas>
 
     <p>
       <label
@@ -101,8 +113,10 @@
         ellipse: ["position", "size", "strokeColor", "backgroundColor"],
         line: ["points", "strokeColor"],
         freedraw: ["points", "strokeColor"],
-        text: ["position", "text", "color", "fontSize"],
+        text: ["position", "size", "text", "color", "fontSize"],
       };
+      // Tools that share the same "drag a box" interaction (shapes + textbox).
+      const BOX_TOOLS = [...SHAPE_TYPES, "text"];
 
       const canvas = document.getElementById("board");
       const ctx = canvas.getContext("2d");
@@ -113,6 +127,7 @@
 
       let currentTool = "select";
       let currentColor = "#1f2937";
+      let currentFontSize = 18;
       let selectedId = null;
 
       // vẽ hình/đường mới
@@ -180,24 +195,39 @@
       }
 
       function textBBox(el) {
-        const { position, text, fontSize } = el.data;
-        if (!position || text === undefined || fontSize === undefined)
-          return null;
-        ctx.font = `${fontSize}px sans-serif`;
-        return {
-          x: position.x,
-          y: position.y,
-          w: ctx.measureText(text).width,
-          h: fontSize * 1.2,
-        };
+        // Text now has an explicit drag-chosen box, same shape as shapeBBox —
+        // kept as its own function since it reads from the same `el.data`
+        // convention and callers ask for it by name (hitTest, rendering).
+        return shapeBBox(el);
+      }
+
+      function wrapText(text, maxWidth) {
+        // ctx.font must already be set by the caller before calling this.
+        const words = text.split(/\s+/);
+        const lines = [];
+        let line = "";
+        for (const word of words) {
+          const attempt = line ? `${line} ${word}` : word;
+          if (line && ctx.measureText(attempt).width > maxWidth) {
+            lines.push(line);
+            line = word;
+          } else {
+            line = attempt;
+          }
+        }
+        if (line) lines.push(line);
+        return lines;
       }
 
       function hitTest(px, py) {
         const entries = Object.entries(elements).reverse(); // ưu tiên phần tử vẽ sau (nằm trên)
         for (const [id, el] of entries) {
           if (el.deleted || !el.type) continue;
-          if (SHAPE_TYPES.includes(el.type) && el.type !== "ellipse") {
-            const bb = shapeBBox(el);
+          if (
+            (SHAPE_TYPES.includes(el.type) && el.type !== "ellipse") ||
+            el.type === "text"
+          ) {
+            const bb = el.type === "text" ? textBBox(el) : shapeBBox(el);
             if (bb && pointInRect(px, py, bb.x, bb.y, bb.w, bb.h)) return id;
           } else if (el.type === "ellipse") {
             const { position, size } = el.data;
@@ -212,9 +242,6 @@
           } else if (LINEAR_TYPES.includes(el.type)) {
             if (el.data.points && hitTestLinear(px, py, el.data.points))
               return id;
-          } else if (el.type === "text") {
-            const bb = textBBox(el);
-            if (bb && pointInRect(px, py, bb.x, bb.y, bb.w, bb.h)) return id;
           }
         }
         return null;
@@ -320,21 +347,24 @@
             ctx.restore();
           }
         } else if (el.type === "text") {
-          if (!d.position || d.text === undefined) return;
+          if (!d.position || !d.size || d.text === undefined) return;
           const fontSize = d.fontSize || 16;
+          const lineHeight = fontSize * 1.2;
           ctx.fillStyle = d.color || "#1f2937";
           ctx.font = `${fontSize}px sans-serif`;
           ctx.textBaseline = "top";
-          ctx.fillText(d.text, d.position.x, d.position.y);
+          const lines = wrapText(d.text, d.size.width);
+          lines.forEach((line, i) =>
+            ctx.fillText(line, d.position.x, d.position.y + i * lineHeight),
+          );
           if (selected) {
-            const w = ctx.measureText(d.text).width;
             ctx.strokeStyle = "#000";
             ctx.setLineDash([2, 2]);
             ctx.strokeRect(
               d.position.x - 2,
               d.position.y - 2,
-              w + 4,
-              fontSize * 1.2 + 4,
+              d.size.width + 4,
+              d.size.height + 4,
             );
             ctx.setLineDash([]);
           }
@@ -342,14 +372,18 @@
       }
 
       function drawActivePreview() {
-        if (SHAPE_TYPES.includes(currentTool) && drawStart && lastMouse) {
+        if (BOX_TOOLS.includes(currentTool) && drawStart && lastMouse) {
           const x = Math.min(drawStart.x, lastMouse.x);
           const y = Math.min(drawStart.y, lastMouse.y);
           const w = Math.abs(lastMouse.x - drawStart.x);
           const h = Math.abs(lastMouse.y - drawStart.y);
+          // text previews as a plain box regardless — diamond/ellipse shapes
+          // only make sense for the actual shape tools.
+          const previewShape =
+            currentTool === "text" ? "rectangle" : currentTool;
           ctx.strokeStyle = "#9ca3af";
           ctx.setLineDash([2, 2]);
-          shapePath(currentTool, x, y, w, h);
+          shapePath(previewShape, x, y, w, h);
           ctx.stroke();
           ctx.setLineDash([]);
         } else if (
@@ -552,7 +586,6 @@
         canvas.addEventListener("mousedown", (e) => {
           const x = e.offsetX;
           const y = e.offsetY;
-          if (currentTool === "text") return; // xử lý ở sự kiện click, xem bên dưới
 
           if (currentTool === "select") {
             const hit = hitTest(x, y);
@@ -575,7 +608,8 @@
             return;
           }
 
-          if (SHAPE_TYPES.includes(currentTool)) {
+          // Shapes VÀ textbox đều dùng chung thao tác "kéo để chọn vùng"
+          if (BOX_TOOLS.includes(currentTool)) {
             isDrawing = true;
             drawStart = { x, y };
             lastMouse = { x, y };
@@ -616,7 +650,7 @@
 
           if (!isDrawing) return;
 
-          if (SHAPE_TYPES.includes(currentTool)) {
+          if (BOX_TOOLS.includes(currentTool)) {
             render();
           } else if (currentTool === "line") {
             currentStroke = [currentStroke[0], { x, y }];
@@ -675,6 +709,40 @@
             sendOp(id, "size", { width: w, height: h }, type);
             sendOp(id, "strokeColor", currentColor, type);
             sendOp(id, "backgroundColor", "transparent", type);
+          } else if (currentTool === "text" && drawStart && lastMouse) {
+            const x = Math.min(drawStart.x, lastMouse.x);
+            const y = Math.min(drawStart.y, lastMouse.y);
+            const w = Math.abs(lastMouse.x - drawStart.x);
+            const h = Math.abs(lastMouse.y - drawStart.y);
+            drawStart = null;
+            if (w < 10 || h < 10) {
+              render();
+              return; // hộp quá nhỏ, coi như kéo nhầm
+            }
+            const text = prompt("Nội dung textbox:");
+            if (!text || !text.trim()) {
+              render();
+              return;
+            }
+            const id = crypto.randomUUID().slice(0, 8);
+            elements[id] = {
+              type: "text",
+              deleted: false,
+              data: {
+                position: { x, y },
+                size: { width: w, height: h },
+                text,
+                color: currentColor,
+                fontSize: currentFontSize,
+              },
+            };
+            selectedId = id;
+            render();
+            sendOp(id, "position", { x, y }, "text");
+            sendOp(id, "size", { width: w, height: h }, "text");
+            sendOp(id, "text", text, "text");
+            sendOp(id, "color", currentColor, "text");
+            sendOp(id, "fontSize", currentFontSize, "text");
           } else if (
             LINEAR_TYPES.includes(currentTool) &&
             currentStroke.length > 1
@@ -696,27 +764,6 @@
           render();
         });
 
-        // --- Textbox: 1 click đặt 1 textbox, nội dung nhập qua prompt() cho gọn ---
-        canvas.addEventListener("click", (e) => {
-          if (currentTool !== "text") return;
-          const text = prompt("Nội dung textbox:");
-          if (!text || !text.trim()) return;
-          const id = crypto.randomUUID().slice(0, 8);
-          const position = { x: e.offsetX, y: e.offsetY };
-          const fontSize = 18;
-          elements[id] = {
-            type: "text",
-            deleted: false,
-            data: { position, text, color: currentColor, fontSize },
-          };
-          selectedId = id;
-          render();
-          sendOp(id, "position", position, "text");
-          sendOp(id, "text", text, "text");
-          sendOp(id, "color", currentColor, "text");
-          sendOp(id, "fontSize", fontSize, "text");
-        });
-
         // --- Tô màu: áp dụng cho nét mới, và tô lại ngay phần tử đang chọn nếu có ---
         document
           .querySelectorAll(".colors button[data-color]")
@@ -729,6 +776,27 @@
                 el.data[field] = currentColor;
                 render();
                 sendOp(selectedId, field, currentColor, el.type);
+              }
+            });
+          });
+
+        // --- Cỡ chữ: áp dụng cho textbox mới, và đổi ngay cỡ chữ của textbox đang chọn ---
+        document
+          .querySelectorAll(".fontsizes button[data-fontsize]")
+          .forEach((btn) => {
+            btn.addEventListener("click", () => {
+              currentFontSize = Number(btn.dataset.fontsize);
+              document
+                .querySelectorAll(".fontsizes button[data-fontsize]")
+                .forEach((b) => b.classList.toggle("active", b === btn));
+              if (
+                selectedId &&
+                elements[selectedId] &&
+                elements[selectedId].type === "text"
+              ) {
+                elements[selectedId].data.fontSize = currentFontSize;
+                render();
+                sendOp(selectedId, "fontSize", currentFontSize, "text");
               }
             });
           });
