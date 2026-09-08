@@ -14,6 +14,8 @@ import { RoomDto, RoomEntity } from './entity/room.entity';
 import { BoardElementEntity } from './entity/board-element.entity';
 import { RedisService } from 'src/redis/redis.service';
 import { ApiError } from 'src/common/lib/errors/ApiError';
+import { ParticipantMetadata } from 'src/common/lib/types/dto/ParticipantMetadata';
+import { AllParticipantThemeColors } from 'src/common/lib/types/dto/ParticipantThemeColors';
 
 @Injectable()
 export class RoomService
@@ -143,11 +145,32 @@ export class RoomService
       );
     }
 
+    const participant = await this.findParticipantById(participantId);
+
+    if (!participant) {
+      throw new ApiError(
+        'Participant not found',
+        HttpStatus.NOT_FOUND,
+        'ERR_PARTICIPANT_NOT_FOUND',
+      );
+    }
+
+    const participantMetadata: ParticipantMetadata = {
+      joinedAt: new Date().toISOString(),
+      displayName:
+        participant?.user?.name ?? participant?.guestName ?? 'Unknown User',
+      // random color
+      themeColor:
+        AllParticipantThemeColors[
+        Math.floor(Math.random() * AllParticipantThemeColors.length)
+        ],
+      cursorX: NaN,
+      cursorY: NaN,
+    };
+
     await this.redisService.hSet(
       this.roomParticipantsKey(roomId, participantId),
-      {
-        joinedAt: new Date().toISOString(),
-      },
+      participantMetadata,
     );
   }
 
