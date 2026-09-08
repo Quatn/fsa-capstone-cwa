@@ -6,6 +6,7 @@ import { BoardTransport, type DatagramHandler } from "@/lib/board/webtransportCl
 
 export type BoardElementsById = Record<string, BoardElement>;
 export type ConnectionState = "connecting" | "connected" | "error";
+export type OpHandler = (op: Op) => void;
 
 interface LoadingElement {
     id: string;
@@ -26,6 +27,8 @@ interface UseBoardTransportResult {
     sendOp: (elementId: string, field: string, value: unknown, type?: ElementType) => void;
     sendDatagram: (payload: unknown) => void;
     onDatagram: (handler: DatagramHandler) => () => void;
+    /** Raw incoming ops, for anything that needs more than the merged `elements` state (e.g. clearing a remote draft when its owner commits). */
+    onOp: (handler: OpHandler) => () => void;
     connectionState: ConnectionState;
     clientId: string | null;
 }
@@ -37,6 +40,8 @@ interface UseBoardTransportResult {
  */
 export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOptions): UseBoardTransportResult {
     const transportRef = useRef<BoardTransport | null>(null);
+    const datagramHandlersRef = useRef<Set<DatagramHandler>>(new Set());
+    const opHandlersRef = useRef<Set<OpHandler>>(new Set());
     const [elements, setElements] = useState<BoardElementsById>({});
     const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
     const [clientId, setClientId] = useState<string | null>(null);
@@ -65,7 +70,12 @@ export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOpti
         setClientId(transport.clientId);
 
         const unsubscribeOp = transport.onOp((op) => {
-            if (!cancelled) applyOp(op);
+            if (cancelled) return;
+            applyOp(op);
+            opHandlersRef.current.forEach((h) => h(op)); // forward cho mọi listener đã/sẽ đăng ký
+        });
+        const unsubscribeDatagram = transport.onDatagram((payload) => {
+            if (!cancelled) datagramHandlersRef.current.forEach((h) => h(payload));
         });
 
         (async () => {
@@ -102,10 +112,20 @@ export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOpti
         return () => {
             cancelled = true;
             unsubscribeOp();
+            unsubscribeDatagram();
             transportRef.current = null;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- reconnect only if the endpoint itself changes
     }, [url, certHashBase64, applyOp]);
+
+    const onDatagram = useCallback((handler: DatagramHandler) => {
+        datagramHandlersRef.current.add(handler);
+        return () => { datagramHandlersRef.current.delete(handler); };
+    }, []);
+
+    const onOp = useCallback((handler: OpHandler) => {
+        opHandlersRef.current.add(handler);
+        return () => { opHandlersRef.current.delete(handler); };
+    }, []);
 
     const sendOp = useCallback((elementId: string, field: string, value: unknown, type?: ElementType) => {
         transportRef.current?.sendOp(elementId, field, value, type).catch((err) => console.error("sendOp failed", err));
@@ -114,11 +134,7 @@ export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOpti
     const sendDatagram = useCallback((payload: unknown) => {
         transportRef.current?.sendDatagram(payload).catch(() => { });
     }, []);
+    // sau khi người dùng đã tương tác, tức là chắc chắn sau khi mount xong.
 
-    const onDatagram = useCallback((handler: DatagramHandler) => {
-        const unsubscribe = transportRef.current?.onDatagram(handler);
-        return unsubscribe ?? (() => { });
-    }, []);
-
-    return { elements, setElements, sendOp, sendDatagram, onDatagram, connectionState, clientId };
+    return { elements, setElements, sendOp, sendDatagram, onDatagram, onOp, connectionState, clientId };
 }
