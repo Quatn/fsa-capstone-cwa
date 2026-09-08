@@ -194,6 +194,7 @@ export class AuthController {
         return successResponse('Authenticated as new participant', {
           userDetails: null,
           guestName: participant.guestName,
+          participantId: participant.id,
           accessToken,
         });
       }

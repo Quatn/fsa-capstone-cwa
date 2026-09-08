@@ -55,4 +55,21 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
   async sIsMember(key: string, value: string): Promise<boolean> {
     return (await this.client.sIsMember(key, value)) === 1;
   }
+
+  async hSet(key: string, values: Record<string, string>): Promise<void> {
+    await this.client.hSet(key, values);
+  }
+
+  async hGetAll<T>(key: string): Promise<T | null> {
+    const values = await this.client.hGetAll(key);
+    return values ? (JSON.parse(JSON.stringify(values)) as T) : null;
+  }
+
+  async sRem(key: string, value: string): Promise<void> {
+    await this.client.sRem(key, value);
+  }
+
+  async expire(key: string, seconds: number): Promise<void> {
+    await this.client.expire(key, seconds);
+  }
 }

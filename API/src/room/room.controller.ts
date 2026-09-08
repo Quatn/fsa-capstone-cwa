@@ -37,11 +37,6 @@ export class RoomController {
       lastActiveAt: new Date(),
     });
 
-    // await this.roomManager.loadRoomToDatastore(room.id);
-    // await this.roomManager.joinParticipantToRoom(room.id, req.participantId);
-    //
-    // console.log(room);
-
     return successResponse('Room created successfully', room);
   }
 

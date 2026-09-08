@@ -37,8 +37,8 @@ export class RoomService
     return `room:${roomId}`;
   }
 
-  private roomParticipantsKey(roomId: string): string {
-    return `room:${roomId}:participants`;
+  private roomParticipantsKey(roomId: string, participantId: string): string {
+    return `room:${roomId}:participants:${participantId}`;
   }
 
   private boardElementKey(boardElementId: string): string {
@@ -97,9 +97,8 @@ export class RoomService
     roomId: string,
     participantId: string,
   ): Promise<boolean> {
-    return this.redisService.sIsMember(
-      this.roomParticipantsKey(roomId),
-      participantId,
+    return this.redisService.exists(
+      this.roomParticipantsKey(roomId, participantId),
     );
   }
 
@@ -144,9 +143,11 @@ export class RoomService
       );
     }
 
-    await this.redisService.sAdd(
-      this.roomParticipantsKey(roomId),
-      participantId,
+    await this.redisService.hSet(
+      this.roomParticipantsKey(roomId, participantId),
+      {
+        joinedAt: new Date().toISOString(),
+      },
     );
   }
 

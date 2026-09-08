@@ -166,6 +166,7 @@ export class AuthService implements AuthSessionValidator {
     return {
       userDetails: participant.user?.toDto() ?? null,
       guestName: participant.guestName,
+      participantId: participant.id,
       accessToken,
     };
   }
