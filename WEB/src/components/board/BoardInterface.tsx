@@ -39,7 +39,7 @@ function createOperation(
   };
 }
 
-export default function WhiteboardPage() {
+export default function BoardInterface() {
   const clientIdRef = useRef<string>("");
   const transportRef = useRef<WebTransport | null>(null);
   const [shapes, setShapes] = useState<Shape[]>([]);

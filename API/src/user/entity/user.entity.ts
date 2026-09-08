@@ -1,11 +1,11 @@
-import { AuthSessionEntity } from 'src/auth/entity/auth-session.entity';
 import { MAX_USERNAME_LENGTH } from 'src/common/constants';
 import { BaseAppEntity, IBaseAppEntity } from 'src/common/entity/BaseAppEntity';
 import {
   AllUserRoles,
   type UserRole,
 } from 'src/common/lib/types/dto/UserRoles';
-import { Column, Entity, OneToMany } from 'typeorm';
+import { ParticipantEntity } from 'src/room/entity/participant.entity';
+import { Column, Entity, OneToOne } from 'typeorm';
 
 export type UserDto = IBaseAppEntity & {
   name: string;
@@ -31,8 +31,8 @@ export class UserEntity extends BaseAppEntity {
 
   // RELATIONS
 
-  @OneToMany(() => AuthSessionEntity, (authSession) => authSession.user)
-  authSessions: AuthSessionEntity[];
+  @OneToOne(() => ParticipantEntity, (participant) => participant.user)
+  participant: ParticipantEntity;
 
   // UTILS
 

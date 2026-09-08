@@ -7,6 +7,7 @@ import { ConfigModule } from '@nestjs/config';
 import { validateEnvs } from './common/config/env.validation';
 import { UserModule } from './user/user.module';
 import { RoomModule } from './room/room.module';
+import { RedisModule } from './redis/redis.module';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { RoomModule } from './room/room.module';
       synchronize: process.env.NODE_ENV !== 'production',
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
     }),
+    RedisModule,
     AuthModule,
     UserModule,
     RoomModule,

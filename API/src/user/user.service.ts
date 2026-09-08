@@ -18,7 +18,12 @@ export class UserService implements UserReader, UserWriter, UserAuthenticator {
   ) { }
 
   async loginWithEmail(email: string, password: string): Promise<UserEntity> {
-    const user = await this.usersRepository.findOne({ where: { email } });
+    const user = await this.usersRepository.findOne({
+      where: { email },
+      relations: {
+        participant: true,
+      },
+    });
 
     if (!user) {
       throw new ApiError(

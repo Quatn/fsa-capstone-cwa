@@ -33,7 +33,7 @@ export class AppController {
   @UseGuards(JwtAuthGuard)
   async test(@Req() req: AuthenticatedRequest): Promise<ApiResponse<string>> {
     return Promise.resolve(
-      successResponse('Test successful', `test as user ${req.userId}`),
+      successResponse('Test successful', `test as user ${req.participantId}`),
     );
   }
 }

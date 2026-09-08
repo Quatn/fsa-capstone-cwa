@@ -5,7 +5,7 @@ import { ChatMessageEntity } from './chat-message.entity';
 
 export type RoomDto = IBaseAppEntity & {
   lastActiveAt: Date;
-  secret: string;
+  // secretHash: string;
 };
 
 @Entity('rooms')
@@ -15,8 +15,8 @@ export class RoomEntity extends BaseAppEntity {
   @Column()
   lastActiveAt: Date;
 
-  @Column({ type: 'text' })
-  secret: string;
+  // @Column({ type: 'text' })
+  // secretHash: string;
 
   // RELATIONS
 
@@ -32,7 +32,7 @@ export class RoomEntity extends BaseAppEntity {
     return {
       id: this.id,
       lastActiveAt: this.lastActiveAt,
-      secret: this.secret,
+      // secretHash: this.secretHash,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };

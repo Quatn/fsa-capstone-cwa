@@ -5,7 +5,7 @@ import {
 } from './entity/auth-session.entity';
 
 export interface AuthSessionValidator {
-  authenticateUser(userId: string): Promise<{
+  authenticateParticipant(participantId: string): Promise<{
     authSession: AuthSessionEntity;
     refreshToken: string;
   }>;

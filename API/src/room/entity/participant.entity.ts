@@ -2,31 +2,38 @@ import { BaseAppEntity, IBaseAppEntity } from 'src/common/entity/BaseAppEntity';
 import { Column, Entity, JoinColumn, OneToMany, OneToOne } from 'typeorm';
 import { ChatMessageEntity } from './chat-message.entity';
 import { UserEntity } from 'src/user/entity/user.entity';
+import { AuthSessionEntity } from 'src/auth/entity/auth-session.entity';
 
 export type ParticipantDto = IBaseAppEntity & {
-  userId: string;
+  userId: string | null;
   guestName: string;
-  lastAccessIp: string;
+  lastAccessIp: string | null;
 };
 
 @Entity('participants')
 export class ParticipantEntity extends BaseAppEntity {
   // COLUMNS
 
-  @Column({ type: 'uuid', nullable: true })
-  userId: string;
+  @Column({ type: 'uuid', nullable: true, unique: true })
+  userId: string | null;
 
   @Column({ type: 'text' })
   guestName: string;
 
-  @Column({ type: 'inet' })
-  lastAccessIp: string;
+  @Column({ type: 'inet', nullable: true })
+  lastAccessIp: string | null;
 
   // RELATIONS
 
-  @OneToOne(() => ParticipantEntity, (participant) => participant.user)
+  @OneToMany(() => AuthSessionEntity, (authSession) => authSession.participant)
+  authSessions: AuthSessionEntity[];
+
+  @OneToOne(() => UserEntity, (user) => user.participant, {
+    nullable: true,
+    onDelete: 'SET NULL',
+  })
   @JoinColumn({ name: 'userId' })
-  user: UserEntity;
+  user: UserEntity | null;
 
   @OneToMany(() => ChatMessageEntity, (chatMessage) => chatMessage.room)
   chatMessages: ChatMessageEntity[];

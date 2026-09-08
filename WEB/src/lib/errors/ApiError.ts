@@ -1,4 +1,4 @@
-import { ApiErrorValues } from "./ApiErrorValues";
+import { ApiErrorValues } from './ApiErrorValues';
 
 export class ApiError extends Error {
   statusCode: number;
