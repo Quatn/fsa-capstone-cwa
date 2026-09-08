@@ -4,7 +4,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Circle, Layer, Line, Rect, Stage, Transformer } from "react-konva";
 import type Konva from "konva";
 import { useBoardTool, type BoardTool } from "@/context/BoardToolContext";
-import type { BoardElementsById } from "@/hooks/useBoardTransport";
+import type { BoardElementsById, OpHandler } from "@/hooks/useBoardTransport";
+import { useUndoRedo } from "@/hooks/useUndoRedo";
 import { ElementRenderer } from "./ElementRenderer";
 import {
   boxFromDrag,
@@ -48,6 +49,8 @@ interface BoardCanvasProps {
   ) => void;
   sendDatagram: (payload: unknown) => void;
   onDatagram: (handler: (payload: unknown) => void) => () => void;
+  onOp: (handler: OpHandler) => () => void;
+  clientId: string | null;
 }
 
 export function BoardCanvas({
@@ -56,6 +59,8 @@ export function BoardCanvas({
   sendOp,
   sendDatagram,
   onDatagram,
+  onOp,
+  clientId,
 }: BoardCanvasProps) {
   const { tool, color, fontSize, selectedId, setSelectedId } = useBoardTool();
 
@@ -64,11 +69,20 @@ export function BoardCanvas({
   const nodeRefs = useRef<Record<string, Konva.Node>>({});
   const lastDatagramAtRef = useRef(0);
 
+  // Kept in sync via effect below so commitFields/createElement/deleteSelected
+  // can read the latest elements without needing `elements` in their own
+  // dependency arrays (keeps their identity — and ElementRenderer's props —
+  // stable across unrelated state updates).
+  const elementsRef = useRef(elements);
+  useEffect(() => {
+    elementsRef.current = elements;
+  }, [elements]);
+
   const [size, setSize] = useState({ width: 1200, height: 800 });
   const [drawStart, setDrawStart] = useState<Point | null>(null);
   const [drawCurrent, setDrawCurrent] = useState<Point | null>(null);
   const [strokePoints, setStrokePoints] = useState<Point[] | null>(null);
-  const [remoteCursor, setRemoteCursor] = useState<Point | null>(null);
+  const [remoteCursors, setRemoteCursors] = useState<Record<string, Point>>({});
   const [remoteDrafts, setRemoteDrafts] = useState<Record<string, Point[]>>({});
 
   // Full-window responsive stage — the viewport is just whatever fits the
@@ -99,43 +113,106 @@ export function BoardCanvas({
   }, [selectedId, elements]);
 
   // Cursor/draft datagrams from other clients — same channel the demo used,
-  // no Redis involved, drawn as a dashed preview / a small ring.
+  // no Redis involved, drawn as a dashed preview / a small ring. Keyed by
+  // clientId so each remote client gets their own tracked cursor/draft
+  // (also what a later "name label per cursor" feature will hang off of).
   useEffect(() => {
     return onDatagram((payload) => {
       const msg = payload as DatagramPayload;
-      if (msg.type === "draft" && msg.clientId && msg.points) {
+      if (!msg.clientId) return; // dữ liệu cũ/hỏng, không rõ của ai — bỏ qua
+      if (msg.type === "draft" && msg.points) {
         setRemoteDrafts((prev) => ({
           ...prev,
           [msg.clientId as string]: msg.points as Point[],
         }));
+        // client này đang vẽ, không còn "chỉ di chuột" — bỏ vòng tròn con trỏ cũ đi
+        setRemoteCursors((prev) => {
+          if (!((msg.clientId as string) in prev)) return prev;
+          const next = { ...prev };
+          delete next[msg.clientId as string];
+          return next;
+        });
       } else if (typeof msg.x === "number" && typeof msg.y === "number") {
-        setRemoteCursor({ x: msg.x, y: msg.y });
+        setRemoteCursors((prev) => ({
+          ...prev,
+          [msg.clientId as string]: { x: msg.x as number, y: msg.y as number },
+        }));
+        // client này không còn vẽ dở (đã thả tay, kể cả khi nét quá ngắn để tạo
+        // phần tử — trường hợp đó không có Op nào được gửi để dọn qua onOp bên dưới)
+        setRemoteDrafts((prev) => {
+          if (!((msg.clientId as string) in prev)) return prev;
+          const next = { ...prev };
+          delete next[msg.clientId as string];
+          return next;
+        });
       }
     });
   }, [onDatagram]);
 
-  // Soft-delete the current selection.
+  // Một op đáng tin cậy (reliable stream) từ 1 client đồng nghĩa họ vừa chốt
+  // xong hành động — dọn draft dang dở của họ, y hệt cách index.html cũ làm
+  // với `delete remoteDrafts[op.time[1]]`.
+  useEffect(() => {
+    return onOp((op) => {
+      const authorId = op.time[1];
+      setRemoteDrafts((prev) => {
+        if (!(authorId in prev)) return prev;
+        const next = { ...prev };
+        delete next[authorId];
+        return next;
+      });
+    });
+  }, [onOp]);
+
+  const { record, undo, redo, setDeleted } = useUndoRedo({
+    elements,
+    setElements,
+    sendOp,
+    onDeselect: (id) => setSelectedId((s) => (s === id ? null : s)),
+  });
+
+  const deleteSelected = useCallback(() => {
+    if (!selectedId) return;
+    const el = elementsRef.current[selectedId];
+    if (!el) return;
+    const id = selectedId;
+    setSelectedId(null);
+    setDeleted(id, true);
+    record({
+      kind: "toggleDeleted",
+      elementId: id,
+      type: el.type,
+      deletedAfter: true,
+    });
+  }, [selectedId, setSelectedId, setDeleted, record]);
+
+  // Delete/Backspace soft-deletes the current selection; Ctrl/Cmd+Z undoes;
+  // Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redoes. All three only fire when nothing
+  // else on the page has focus, same guard the delete handler always had.
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
-      if (
-        (e.key === "Delete" || e.key === "Backspace") &&
-        selectedId &&
-        document.activeElement === document.body
-      ) {
+      if (document.activeElement !== document.body) return;
+      const mod = e.ctrlKey || e.metaKey;
+
+      if (mod && e.key.toLowerCase() === "z") {
         e.preventDefault();
-        const id = selectedId;
-        setSelectedId(null);
-        setElements((prev) => {
-          const existing = prev[id];
-          if (!existing) return prev;
-          return { ...prev, [id]: { ...existing, deleted: true } };
-        });
-        sendOp(id, "deleted", true);
+        if (e.shiftKey) redo();
+        else undo();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "y") {
+        e.preventDefault();
+        redo();
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        e.preventDefault();
+        deleteSelected();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [selectedId, setElements, sendOp, setSelectedId]);
+  }, [undo, redo, deleteSelected]);
 
   const registerNode = useCallback((id: string, node: Konva.Node | null) => {
     if (node) nodeRefs.current[id] = node;
@@ -149,8 +226,15 @@ export function BoardCanvas({
     [tool, setSelectedId],
   );
 
-  const handleCommitField = useCallback(
-    (id: string, field: string, value: unknown, type: ElementType) => {
+  const commitFields = useCallback(
+    (id: string, type: ElementType, changes: Record<string, unknown>) => {
+      const current = elementsRef.current[id];
+      const before: Record<string, unknown> = {};
+      for (const field of Object.keys(changes)) {
+        before[field] = current
+          ? (current.data as Record<string, unknown>)[field]
+          : undefined;
+      }
       setElements((prev) => {
         const existing = prev[id];
         if (!existing) return prev;
@@ -158,13 +242,15 @@ export function BoardCanvas({
           ...prev,
           [id]: {
             ...existing,
-            data: { ...existing.data, [field]: value },
+            data: { ...existing.data, ...changes },
           } as BoardElement,
         };
       });
-      sendOp(id, field, value, type);
+      for (const [field, value] of Object.entries(changes))
+        sendOp(id, field, value, type);
+      record({ kind: "fields", elementId: id, type, before, after: changes });
     },
-    [sendOp, setElements],
+    [setElements, sendOp, record],
   );
 
   const createElement = useCallback(
@@ -180,8 +266,14 @@ export function BoardCanvas({
       }));
       setSelectedId(id);
       for (const field of fields) sendOp(id, field, data[field], type);
+      record({
+        kind: "toggleDeleted",
+        elementId: id,
+        type,
+        deletedAfter: false,
+      });
     },
-    [setElements, setSelectedId, sendOp],
+    [setElements, setSelectedId, sendOp, record],
   );
 
   const getWorldPointer = useCallback((): Point | null => {
@@ -192,16 +284,17 @@ export function BoardCanvas({
 
   const maybeBroadcastPointer = useCallback(
     (p: Point, draftPoints: Point[] | null) => {
+      if (!clientId) return; // chưa kết nối xong, chưa có id để tự nhận diện
       const now = Date.now();
       if (now - lastDatagramAtRef.current < 100) return;
       lastDatagramAtRef.current = now;
       if (draftPoints && draftPoints.length > 1) {
-        sendDatagram({ type: "draft", points: draftPoints });
+        sendDatagram({ type: "draft", clientId, points: draftPoints });
       } else {
-        sendDatagram({ type: "cursor", x: p.x, y: p.y });
+        sendDatagram({ type: "cursor", clientId, x: p.x, y: p.y });
       }
     },
-    [sendDatagram],
+    [sendDatagram, clientId],
   );
 
   const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
@@ -324,7 +417,7 @@ export function BoardCanvas({
               draggable={tool === "select"}
               registerNode={registerNode}
               onSelect={handleSelect}
-              onCommitField={handleCommitField}
+              onCommitFields={commitFields}
             />
           ))}
 
@@ -373,10 +466,10 @@ export function BoardCanvas({
 
         {/* other clients' in-progress line/freedraw strokes + cursor, via datagram */}
         {Object.entries(remoteDrafts).map(
-          ([clientId, pts]) =>
+          ([authorId, pts]) =>
             pts.length > 1 && (
               <Line
-                key={clientId}
+                key={authorId}
                 points={flattenPoints(pts)}
                 stroke="#9ca3af"
                 dash={[4, 4]}
@@ -385,16 +478,17 @@ export function BoardCanvas({
               />
             ),
         )}
-        {remoteCursor && (
+        {Object.entries(remoteCursors).map(([id, pos]) => (
           <Circle
-            x={remoteCursor.x}
-            y={remoteCursor.y}
+            key={id}
+            x={pos.x}
+            y={pos.y}
             radius={8}
             stroke="#d97706"
             dash={[3, 3]}
             listening={false}
           />
-        )}
+        ))}
 
         <Transformer ref={transformerRef} rotateEnabled={false} />
       </Layer>

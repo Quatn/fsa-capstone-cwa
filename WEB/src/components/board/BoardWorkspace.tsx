@@ -17,7 +17,9 @@ function BoardWorkspaceInner({ wsUrl, certHashBase64 }: BoardWorkspaceProps) {
     sendOp,
     sendDatagram,
     onDatagram,
+    onOp,
     connectionState,
+    clientId,
   } = useBoardTransport({
     url: wsUrl,
     certHashBase64,
@@ -31,6 +33,8 @@ function BoardWorkspaceInner({ wsUrl, certHashBase64 }: BoardWorkspaceProps) {
         sendOp={sendOp}
         sendDatagram={sendDatagram}
         onDatagram={onDatagram}
+        onOp={onOp}
+        clientId={clientId}
       />
       <div className="pointer-events-none absolute left-4 top-4 z-10">
         <BoardToolbar connectionState={connectionState} />
