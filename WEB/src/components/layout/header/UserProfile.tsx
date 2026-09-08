@@ -1,12 +1,12 @@
 "use client";
 
-import { AuthContextFunctions } from "@/context/auth-context";
+import { useAppSelector } from "@/services/client/hooks";
 
 export default function UserProfile() {
-  const { data } = AuthContextFunctions.useState();
+  const { authState } = useAppSelector((state) => state.auth);
 
   return (
-    <div>{JSON.stringify(data)}</div>
+    <div>{JSON.stringify(authState)}</div>
   )
 }
 

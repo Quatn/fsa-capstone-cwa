@@ -1,4 +1,4 @@
-import { UserRole } from "./UserRoles";
+import { UserRole } from './UserRoles';
 
 export type UserDetails = {
   id: string;

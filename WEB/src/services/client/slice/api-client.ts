@@ -1,13 +1,14 @@
 import { createApi, fetchBaseQuery } from "@reduxjs/toolkit/query/react";
 import { BASE_URL } from "../constants";
 import { EndpointBuilder } from "@reduxjs/toolkit/query";
-import { accessTokenStore } from "../auth-token";
+import { RootState } from "../root-reducer";
 
 const baseQuery = fetchBaseQuery({
   baseUrl: BASE_URL,
   credentials: "include",
-  prepareHeaders: (headers) => {
-    const accessToken = accessTokenStore.get();
+  prepareHeaders: (headers, { getState }) => {
+    const state = getState() as RootState;
+    const accessToken = state.auth.authState?.accessToken;
 
     if (accessToken) {
       headers.set("Authorization", `Bearer ${accessToken}`);
@@ -20,6 +21,7 @@ const baseQuery = fetchBaseQuery({
 const tagTypes = [
   "User",
   "Auth",
+  "Room",
 ];
 
 export const apiClient = createApi({

@@ -1,9 +1,9 @@
-import joinRoomAction from "@/services/server/joinRoomAction";
+import navigateToRoomAction from "@/services/server/navigateToRoomAction";
 
-export default function JoinRoomCard() {
+export default function NavigateToRoomCard() {
   return (
     <form
-      action={joinRoomAction}
+      action={navigateToRoomAction}
       className="rounded-lg border border-gray-200 bg-gray-50 p-6 shadow-sm"
     >
       <label htmlFor="room-id" className="mb-3 block text-sm font-medium text-gray-900">

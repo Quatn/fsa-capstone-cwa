@@ -1,13 +1,13 @@
+import AuthLayout from "@/components/layout/AuthLayout";
 import Header from "@/components/layout/header/Header";
-import { AuthProvider } from "@/context/auth-context-provider";
 
 export default function AuthenticatedLayout({ children }: LayoutProps<"/">) {
   return (
-    <AuthProvider>
+    <AuthLayout>
       <div><Header /> </div>
       <div className="grow">
         {children}
       </div>
-    </AuthProvider>
+    </AuthLayout>
   );
 }

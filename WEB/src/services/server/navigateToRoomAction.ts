@@ -2,7 +2,7 @@
 
 import { redirect } from 'next/navigation'
 
-export default async function joinRoomAction(formData: FormData) {
+export default async function navigateToRoomAction(formData: FormData) {
   const id = formData.get('id')
   // const secret = formData.get('secret')
 
