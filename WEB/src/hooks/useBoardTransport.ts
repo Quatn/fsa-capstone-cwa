@@ -18,6 +18,8 @@ interface LoadingElement {
 interface UseBoardTransportOptions {
     url: string;
     certHashBase64: string;
+    /** Which room to join — see server.ts: this rides along on the GET_STATE request. */
+    roomId: string;
 }
 
 interface UseBoardTransportResult {
@@ -36,15 +38,30 @@ interface UseBoardTransportResult {
 /**
  * Bridges BoardTransport (plain WebTransport wrapper, no React/Konva
  * knowledge) into React state. Mirrors what `index.html`'s `main()` used to
- * do inline: connect, load initial state, apply pushed ops as they arrive.
+ * do inline: connect, join a room + load its initial state, apply pushed
+ * ops as they arrive.
  */
-export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOptions): UseBoardTransportResult {
+export function useBoardTransport({ url, certHashBase64, roomId }: UseBoardTransportOptions): UseBoardTransportResult {
     const transportRef = useRef<BoardTransport | null>(null);
-    const datagramHandlersRef = useRef<Set<DatagramHandler>>(new Set());
-    const opHandlersRef = useRef<Set<OpHandler>>(new Set());
     const [elements, setElements] = useState<BoardElementsById>({});
     const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
     const [clientId, setClientId] = useState<string | null>(null);
+
+    // Subscriber sets for external consumers (BoardCanvas) of onOp/onDatagram.
+    // These exist from the very first render, NOT created inside the connect
+    // effect below — specifically so a CHILD component's effect can subscribe
+    // successfully no matter which effect happens to run first. React fires a
+    // child's effects before its parent's on mount, so BoardCanvas subscribing
+    // via onOp/onDatagram in its own effect can run BEFORE this hook's own
+    // connect effect has even constructed a BoardTransport — subscribing
+    // straight against `transportRef.current` at that moment would silently
+    // attach to `null` (lost forever, no error, since every call site here is
+    // optional-chained). Routing through these ref-based Sets instead
+    // decouples "when something subscribes" from "when the transport exists":
+    // the connect effect forwards into whatever's registered here once data
+    // actually starts arriving, regardless of subscribe-vs-connect ordering.
+    const opHandlersRef = useRef<Set<OpHandler>>(new Set());
+    const datagramHandlersRef = useRef<Set<DatagramHandler>>(new Set());
 
     const applyOp = useCallback((op: Op) => {
         setElements((prev) => {
@@ -65,6 +82,11 @@ export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOpti
 
     useEffect(() => {
         let cancelled = false;
+        // Nếu đây là chuyển phòng (không phải lần mount đầu), đừng để phần tử
+        // của phòng cũ còn hiện trên màn hình trong lúc phòng mới đang tải.
+        setElements({});
+        setConnectionState("connecting");
+
         const transport = new BoardTransport();
         transportRef.current = transport;
         setClientId(transport.clientId);
@@ -72,16 +94,17 @@ export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOpti
         const unsubscribeOp = transport.onOp((op) => {
             if (cancelled) return;
             applyOp(op);
-            opHandlersRef.current.forEach((h) => h(op)); // forward cho mọi listener đã/sẽ đăng ký
+            opHandlersRef.current.forEach((h) => h(op));
         });
         const unsubscribeDatagram = transport.onDatagram((payload) => {
-            if (!cancelled) datagramHandlersRef.current.forEach((h) => h(payload));
+            if (cancelled) return;
+            datagramHandlersRef.current.forEach((h) => h(payload));
         });
 
         (async () => {
             try {
                 await transport.connect(url, certHashBase64);
-                const raw = await transport.loadState();
+                const raw = await transport.loadState(roomId);
                 if (cancelled) return;
 
                 const loading: Record<string, LoadingElement> = {};
@@ -115,17 +138,8 @@ export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOpti
             unsubscribeDatagram();
             transportRef.current = null;
         };
-    }, [url, certHashBase64, applyOp]);
-
-    const onDatagram = useCallback((handler: DatagramHandler) => {
-        datagramHandlersRef.current.add(handler);
-        return () => { datagramHandlersRef.current.delete(handler); };
-    }, []);
-
-    const onOp = useCallback((handler: OpHandler) => {
-        opHandlersRef.current.add(handler);
-        return () => { opHandlersRef.current.delete(handler); };
-    }, []);
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- reconnect only if the endpoint or room itself changes
+    }, [url, certHashBase64, roomId, applyOp]);
 
     const sendOp = useCallback((elementId: string, field: string, value: unknown, type?: ElementType) => {
         transportRef.current?.sendOp(elementId, field, value, type).catch((err) => console.error("sendOp failed", err));
@@ -134,7 +148,16 @@ export function useBoardTransport({ url, certHashBase64 }: UseBoardTransportOpti
     const sendDatagram = useCallback((payload: unknown) => {
         transportRef.current?.sendDatagram(payload).catch(() => { });
     }, []);
-    // sau khi người dùng đã tương tác, tức là chắc chắn sau khi mount xong.
+
+    const onDatagram = useCallback((handler: DatagramHandler) => {
+        datagramHandlersRef.current.add(handler);
+        return () => datagramHandlersRef.current.delete(handler);
+    }, []);
+
+    const onOp = useCallback((handler: OpHandler) => {
+        opHandlersRef.current.add(handler);
+        return () => opHandlersRef.current.delete(handler);
+    }, []);
 
     return { elements, setElements, sendOp, sendDatagram, onDatagram, onOp, connectionState, clientId };
 }

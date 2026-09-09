@@ -52,7 +52,8 @@ function parseStoredField(raw: string): RawStateEntry | null {
  * Thin wrapper around the browser WebTransport API, carrying exactly the
  * three channels the HTTP3 server exposes (see /HTTP3/server.ts):
  *  - unidirectional streams for reliable, CRDT-merged field ops
- *  - one bidirectional stream per GET_STATE request
+ *  - one bidirectional stream per GET_STATE request (which also declares
+ *    which room this session belongs to — see loadState below)
  *  - datagrams for cursor/draft broadcasts (no Redis, no ordering guarantee)
  *
  * Deliberately has no React/Konva knowledge — `useBoardTransport` is the
@@ -114,12 +115,20 @@ export class BoardTransport {
         }
     }
 
-    /** One round trip over a fresh bidirectional stream, mirrors the server's GET_STATE handler. */
-    async loadState(): Promise<Record<string, RawStateEntry>> {
+    /**
+     * One round trip over a fresh bidirectional stream. Doubles as both
+     * "give me this room's current state" AND "put this session in that
+     * room" — the server does both from the same request (see
+     * `handleReadStream` in server.ts) since there's no reliable way to pass
+     * a dynamic roomId through the WebTransport connection URL itself.
+     * Safe to call again later for the same room (e.g. a manual resync) —
+     * joining a room you're already in is a no-op server-side.
+     */
+    async loadState(roomId: string): Promise<Record<string, RawStateEntry>> {
         if (!this.transport) throw new Error("BoardTransport: not connected");
         const stream = await this.transport.createBidirectionalStream();
         const writer = stream.writable.getWriter();
-        await writer.write(new TextEncoder().encode("GET_STATE"));
+        await writer.write(new TextEncoder().encode(JSON.stringify({ cmd: "GET_STATE", roomId })));
         const bytes = await readAll(stream.readable as ReadableStream<Uint8Array>);
         await writer.close();
 

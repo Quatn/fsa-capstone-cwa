@@ -6,11 +6,16 @@ import { BoardCanvas } from "./BoardCanvas";
 import { BoardToolbar } from "./BoardToolbar";
 
 export interface BoardWorkspaceProps {
+  roomId: string;
   wsUrl: string;
   certHashBase64: string;
 }
 
-function BoardWorkspaceInner({ wsUrl, certHashBase64 }: BoardWorkspaceProps) {
+function BoardWorkspaceInner({
+  roomId,
+  wsUrl,
+  certHashBase64,
+}: BoardWorkspaceProps) {
   const {
     elements,
     setElements,
@@ -23,6 +28,7 @@ function BoardWorkspaceInner({ wsUrl, certHashBase64 }: BoardWorkspaceProps) {
   } = useBoardTransport({
     url: wsUrl,
     certHashBase64,
+    roomId,
   });
 
   return (
