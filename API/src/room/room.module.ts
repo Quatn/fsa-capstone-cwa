@@ -13,6 +13,7 @@ import {
 import { RedisModule } from 'src/redis/redis.module';
 import { RoomEntity } from './entity/room.entity';
 import { BoardElementEntity } from './entity/board-element.entity';
+import { ChatMessageEntity } from './entity/chat-message.entity';
 
 @Module({
   imports: [
@@ -20,6 +21,7 @@ import { BoardElementEntity } from './entity/board-element.entity';
       ParticipantEntity,
       RoomEntity,
       BoardElementEntity,
+      ChatMessageEntity,
     ]),
     RedisModule,
   ],
