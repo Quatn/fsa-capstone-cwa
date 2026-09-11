@@ -8,6 +8,7 @@ import { validateEnvs } from './common/config/env.validation';
 import { UserModule } from './user/user.module';
 import { RoomModule } from './room/room.module';
 import { RedisModule } from './redis/redis.module';
+import { AdminModule } from './admin/admin.module';
 
 @Module({
   imports: [
@@ -30,6 +31,7 @@ import { RedisModule } from './redis/redis.module';
     AuthModule,
     UserModule,
     RoomModule,
+    AdminModule, // Module quản trị admin
   ],
   controllers: [AppController],
   providers: [AppService],
