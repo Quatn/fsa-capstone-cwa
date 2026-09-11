@@ -1,8 +1,3 @@
-// `@fails-components/webtransport` ships no published TS types yet. Rather
-// than lock in a hand-written shape now (which would need to be deleted by
-// hand the moment real types are published), the session/stream objects it
-// hands us are left as `any` below — everything else in this file (Op
-// parsing, Redis storage) stays fully typed.
 import { Http3Server } from "@fails-components/webtransport";
 import { readFileSync } from "fs";
 import { createHash, X509Certificate } from "crypto";
@@ -32,7 +27,10 @@ redis.on("error", (err) => console.error("Redis error:", err));
 await redis.connect();
 
 const ROOM_KEY = "board:demo-room";
-const roomSessions = new Set<any>(); // demo: 1 phòng cố định, nên chỉ cần 1 Set
+const roomSessions = new Set<any>(); 
+
+const TOMBSTONE_TTL_MS = Number(process.env.TOMBSTONE_TTL_MS ?? 24 * 60 * 60 * 1000); // 24h
+const TOMBSTONE_SWEEP_INTERVAL_MS = Number(process.env.TOMBSTONE_SWEEP_INTERVAL_MS ?? 10 * 60 * 1000); // 10p
 
 /** Shape actually stored in the Redis hash for every `elementId:field` entry. */
 interface StoredField {
@@ -56,6 +54,41 @@ function parseStoredField(raw: string): StoredField | null {
   return { value: p.value, time: [t[0], t[1]] };
 }
 
+async function sweepExpiredTombstones(): Promise<void> {
+  const all = await redis.hGetAll(ROOM_KEY);
+  const now = Date.now();
+
+  const candidateIds: string[] = [];
+  for (const [hashField, raw] of Object.entries(all)) {
+    if (!hashField.endsWith(":deleted")) continue;
+    const parsed = parseStoredField(raw);
+    if (!parsed || parsed.value !== true) continue;
+    if (now - parsed.time[0] < TOMBSTONE_TTL_MS) continue;
+    candidateIds.push(hashField.slice(0, -":deleted".length));
+  }
+  if (candidateIds.length === 0) return;
+
+  let purgedElements = 0;
+  let purgedFields = 0;
+  for (const elementId of candidateIds) {
+    // Re-check right before deleting — the element may have been restored
+    // (deleted: false, newer timestamp) since the HGETALL above; this keeps
+    // that race window small rather than eliminating a whole-hash re-scan.
+    const recheckRaw = await redis.hGet(ROOM_KEY, `${elementId}:deleted`);
+    const recheck = recheckRaw ? parseStoredField(recheckRaw) : null;
+    if (!recheck || recheck.value !== true || now - recheck.time[0] < TOMBSTONE_TTL_MS) continue;
+
+    const fields = Object.keys(all).filter((f) => f.startsWith(`${elementId}:`));
+    if (fields.length === 0) continue;
+    await redis.hDel(ROOM_KEY, fields);
+    purgedElements += 1;
+    purgedFields += fields.length;
+  }
+  if (purgedElements > 0) {
+    console.log(`tombstone sweep: purged ${purgedFields} fields from ${purgedElements} elements`);
+  }
+}
+
 async function broadcastStreamOp(payload: Uint8Array, exclude: any): Promise<void> {
   for (const s of roomSessions) {
     if (s === exclude) continue;
@@ -70,7 +103,6 @@ async function broadcastStreamOp(payload: Uint8Array, exclude: any): Promise<voi
   }
 }
 
-// ---- GHI: nhận operation qua unidirectional stream, merge field-level, ghi Redis, broadcast ----
 async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: any): Promise<void> {
   const reader = stream.getReader();
   const chunks: Uint8Array[] = [];
@@ -106,9 +138,6 @@ async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: an
     const stored: StoredField = { value: op.value, time: op.time };
     await redis.hSet(ROOM_KEY, hashField, JSON.stringify(stored));
 
-    // "type" là bất biến — set 1 lần khi phần tử được tạo, để GET_STATE có
-    // thể suy ra type mà không cần quét toàn bộ field. Không áp dụng cho
-    // DeleteOp vì nó không gắn với 1 type cụ thể.
     if (op.field !== "deleted") {
       const typeField = `${op.elementId}:__type`;
       const storedType: StoredField = { value: op.type, time: op.time };
@@ -122,7 +151,6 @@ async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: an
   }
 }
 
-// ---- ĐỌC: client gửi "GET_STATE" qua bidirectional stream, trả về toàn bộ board ----
 async function handleReadStream(stream: any): Promise<void> {
   const reader = stream.readable.getReader();
   const writer = stream.writable.getWriter();
@@ -135,9 +163,6 @@ async function handleReadStream(stream: any): Promise<void> {
   await writer.close();
 }
 
-// ---- DATAGRAM: cursor + draft (nét nháp) — relay cho các session KHÁC trong
-// phòng, KHÔNG chạm Redis. Server không cần biết type "cursor" hay "draft",
-// chỉ forward nguyên xi byte nhận được — client tự phân loại theo payload. ----
 async function handleDatagrams(session: any): Promise<void> {
   const reader = session.datagrams.readable.getReader();
   while (true) {
@@ -192,3 +217,8 @@ async function handleDatagrams(session: any): Promise<void> {
 h3Server.startServer();
 console.log(`Server started at port ${h3Server.port ?? process.env.PORT ?? 5000}`);
 console.log("Element types supported:", ELEMENT_TYPES.join(", "));
+
+sweepExpiredTombstones().catch((err) => console.error("tombstone sweep error:", err));
+setInterval(() => {
+  sweepExpiredTombstones().catch((err) => console.error("tombstone sweep error:", err));
+}, TOMBSTONE_SWEEP_INTERVAL_MS);

@@ -1,6 +1,13 @@
 "use client";
 
-import { createContext, useContext, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useState,
+  type ReactNode,
+  type Dispatch,
+  type SetStateAction,
+} from "react";
 import type { ElementType } from "@/types/board";
 
 export type BoardTool = "select" | "pan" | ElementType;
@@ -13,7 +20,7 @@ interface BoardToolContextValue {
   fontSize: number;
   setFontSize: (fontSize: number) => void;
   selectedId: string | null;
-  setSelectedId: (id: string | null) => void;
+  setSelectedId: Dispatch<SetStateAction<string | null>>;
 }
 
 const BoardToolContext = createContext<BoardToolContextValue | null>(null);

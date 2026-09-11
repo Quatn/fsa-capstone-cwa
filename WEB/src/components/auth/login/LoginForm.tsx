@@ -29,7 +29,11 @@ export const LoginForm = () => {
       const { data: response } = reduxResponse;
       if (response?.success) {
         toast.success(`Login successful as ${response.data.name}`);
-        router.push("/");
+        if (response.data.role === "admin") {
+          router.push("/admin");
+        } else {
+          router.push("/room");
+        }
       }
       else {
         const errorValue = parseApiErrorValue(reduxResponse.error);

@@ -22,11 +22,10 @@ interface ElementRendererProps {
   /** Registers the underlying Konva node so BoardCanvas can attach a Transformer to it. */
   registerNode: (id: string, node: Konva.Node | null) => void;
   onSelect: (id: string) => void;
-  onCommitField: (
+  onCommitFields: (
     id: string,
-    field: string,
-    value: unknown,
     type: ElementType,
+    changes: Record<string, unknown>,
   ) => void;
 }
 
@@ -39,7 +38,7 @@ export function ElementRenderer({
   draggable,
   registerNode,
   onSelect,
-  onCommitField,
+  onCommitFields,
 }: ElementRendererProps) {
   const { id, type, data } = element;
 
@@ -60,7 +59,9 @@ export function ElementRenderer({
     const stroke = d.strokeColor ?? "#1f2937";
 
     const handleDragEnd = (e: KonvaDragEvent) => {
-      onCommitField(id, "position", { x: e.target.x(), y: e.target.y() }, type);
+      onCommitFields(id, type, {
+        position: { x: e.target.x(), y: e.target.y() },
+      });
     };
     const handleTransformEnd = (e: KonvaTransformEvent) => {
       const node = e.target as Konva.Node;
@@ -68,8 +69,10 @@ export function ElementRenderer({
       const newHeight = Math.max(4, node.height() * node.scaleY());
       node.scaleX(1);
       node.scaleY(1);
-      onCommitField(id, "position", { x: node.x(), y: node.y() }, type);
-      onCommitField(id, "size", { width: newWidth, height: newHeight }, type);
+      onCommitFields(id, type, {
+        position: { x: node.x(), y: node.y() },
+        size: { width: newWidth, height: newHeight },
+      });
     };
 
     return (
@@ -137,12 +140,9 @@ export function ElementRenderer({
 
     const handleDragEnd = (e: KonvaDragEvent) => {
       const node = e.target;
-      onCommitField(
-        id,
-        "position",
-        { x: node.x() - width / 2, y: node.y() - height / 2 },
-        type,
-      );
+      onCommitFields(id, type, {
+        position: { x: node.x() - width / 2, y: node.y() - height / 2 },
+      });
     };
     const handleTransformEnd = (e: KonvaTransformEvent) => {
       const node = e.target as Konva.Node;
@@ -150,13 +150,10 @@ export function ElementRenderer({
       const newHeight = Math.max(4, height * node.scaleY());
       node.scaleX(1);
       node.scaleY(1);
-      onCommitField(
-        id,
-        "position",
-        { x: node.x() - newWidth / 2, y: node.y() - newHeight / 2 },
-        type,
-      );
-      onCommitField(id, "size", { width: newWidth, height: newHeight }, type);
+      onCommitFields(id, type, {
+        position: { x: node.x() - newWidth / 2, y: node.y() - newHeight / 2 },
+        size: { width: newWidth, height: newHeight },
+      });
     };
 
     return (
@@ -202,7 +199,7 @@ export function ElementRenderer({
       const dy = node.y();
       node.position({ x: 0, y: 0 }); // gộp lệch vào chính points, không giữ offset trên node
       const translated = d.points!.map((p) => ({ x: p.x + dx, y: p.y + dy }));
-      onCommitField(id, "points", translated, type);
+      onCommitFields(id, type, { points: translated });
     };
 
     return (
@@ -244,7 +241,9 @@ export function ElementRenderer({
   const fill = d.color ?? "#1f2937";
 
   const handleDragEnd = (e: KonvaDragEvent) => {
-    onCommitField(id, "position", { x: e.target.x(), y: e.target.y() }, type);
+    onCommitFields(id, type, {
+      position: { x: e.target.x(), y: e.target.y() },
+    });
   };
   const handleTransformEnd = (e: KonvaTransformEvent) => {
     const node = e.target as Konva.Node;
@@ -252,8 +251,10 @@ export function ElementRenderer({
     const newHeight = Math.max(16, height * node.scaleY());
     node.scaleX(1);
     node.scaleY(1);
-    onCommitField(id, "position", { x: node.x(), y: node.y() }, type);
-    onCommitField(id, "size", { width: newWidth, height: newHeight }, type);
+    onCommitFields(id, type, {
+      position: { x: node.x(), y: node.y() },
+      size: { width: newWidth, height: newHeight },
+    });
   };
 
   return (
