@@ -180,6 +180,10 @@ services:
         echo 'Running sql seed file...';
         psql --host=postgres --username=${DB_USER} --dbname=${DB_NAME} --file=/scripts/02-seed.sql;
         echo 'Seed complete';
+
+        echo 'Running admin sql seed file...';
+        psql --host=postgres --username=${DB_USER} --dbname=${DB_NAME} --file=/scripts/03-admin-seed.sql;
+        echo 'Seed complete';
       "
 
 volumes:
