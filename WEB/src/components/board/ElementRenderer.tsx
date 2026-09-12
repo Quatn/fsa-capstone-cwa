@@ -10,6 +10,11 @@ import type {
   TextData,
 } from "@/types/board";
 import { diamondPoints, flattenPoints } from "@/lib/board/geometry";
+import {
+  TEXT_FONT_FAMILY,
+  TEXT_LINE_HEIGHT,
+  TEXT_PADDING,
+} from "@/lib/board/text";
 
 export type KonvaMouseEvent = Konva.KonvaEventObject<MouseEvent>;
 export type KonvaDragEvent = Konva.KonvaEventObject<DragEvent>;
@@ -19,9 +24,12 @@ interface ElementRendererProps {
   element: BoardElement;
   selected: boolean;
   draggable: boolean;
+  /** True while this element's text is being typed into the overlaid textarea. */
+  editing: boolean;
   /** Registers the underlying Konva node so BoardCanvas can attach a Transformer to it. */
   registerNode: (id: string, node: Konva.Node | null) => void;
   onSelect: (id: string) => void;
+  onStartEdit: (id: string) => void;
   onCommitFields: (
     id: string,
     type: ElementType,
@@ -36,8 +44,10 @@ export function ElementRenderer({
   element,
   selected,
   draggable,
+  editing,
   registerNode,
   onSelect,
+  onStartEdit,
   onCommitFields,
 }: ElementRendererProps) {
   const { id, type, data } = element;
@@ -245,15 +255,28 @@ export function ElementRenderer({
       position: { x: e.target.x(), y: e.target.y() },
     });
   };
+
+  // Runs on every frame of a resize, not just at the end: a Transformer works
+  // by scaling its node, which on a Text would stretch the glyphs themselves.
+  // Folding that scale straight back into width/height leaves the letters at
+  // their own font size and reflows the wrap instead. The lower bound lives on
+  // the Transformer's boundBoxFunc (see BoardCanvas) rather than here, so a
+  // rejected frame keeps the box's position too, not just its size.
+  const handleTransform = (e: KonvaTransformEvent) => {
+    const node = e.target as Konva.Text;
+    node.setAttrs({
+      width: node.width() * node.scaleX(),
+      height: node.height() * node.scaleY(),
+      scaleX: 1,
+      scaleY: 1,
+    });
+  };
+
   const handleTransformEnd = (e: KonvaTransformEvent) => {
-    const node = e.target as Konva.Node;
-    const newWidth = Math.max(20, width * node.scaleX());
-    const newHeight = Math.max(16, height * node.scaleY());
-    node.scaleX(1);
-    node.scaleY(1);
+    const node = e.target as Konva.Text;
     onCommitFields(id, type, {
       position: { x: node.x(), y: node.y() },
-      size: { width: newWidth, height: newHeight },
+      size: { width: node.width(), height: node.height() },
     });
   };
 
@@ -267,14 +290,21 @@ export function ElementRenderer({
         height={height}
         text={d.text}
         fontSize={fontSize}
+        fontFamily={TEXT_FONT_FAMILY}
+        lineHeight={TEXT_LINE_HEIGHT}
+        padding={TEXT_PADDING}
         fill={fill}
         wrap="word"
+        visible={!editing}
         draggable={draggable}
         onMouseDown={stopBubbleAndSelect}
+        onDblClick={() => onStartEdit(id)}
+        onDblTap={() => onStartEdit(id)}
         onDragEnd={handleDragEnd}
+        onTransform={handleTransform}
         onTransformEnd={handleTransformEnd}
       />
-      {selected && (
+      {selected && !editing && (
         <Rect
           x={x - 2}
           y={y - 2}

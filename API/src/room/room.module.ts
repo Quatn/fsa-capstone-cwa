@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { RoomController } from './room.controller';
 import { RoomService } from './room.service';
+import { BoardSyncService } from './board-sync.service';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ParticipantEntity } from './entity/participant.entity';
 import {
@@ -28,6 +29,7 @@ import { ChatMessageEntity } from './entity/chat-message.entity';
   controllers: [RoomController],
   providers: [
     RoomService,
+    BoardSyncService,
     {
       provide: PARTICIPANT_READER,
       useExisting: RoomService,

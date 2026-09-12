@@ -4,6 +4,7 @@ import { AppService } from './app.service';
 import { AuthModule } from './auth/auth.module';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { ConfigModule } from '@nestjs/config';
+import { ScheduleModule } from '@nestjs/schedule';
 import { validateEnvs } from './common/config/env.validation';
 import { UserModule } from './user/user.module';
 import { RoomModule } from './room/room.module';
@@ -27,6 +28,7 @@ import { AdminModule } from './admin/admin.module';
       synchronize: process.env.NODE_ENV !== 'production',
       entities: [__dirname + '/**/*.entity{.ts,.js}'],
     }),
+    ScheduleModule.forRoot(),
     RedisModule,
     AuthModule,
     UserModule,
