@@ -1,3 +1,5 @@
+// not in use
+
 import { BoardWorkspaceLoader } from "@/components/board/BoardWorkspaceLoader";
 
 const WS_URL =
