@@ -131,6 +131,85 @@ export interface DeleteOp {
 export type Op = BoardOp | DeleteOp;
 
 // ---------------------------------------------------------------------------
+// Chat. Deliberately Redis-only and session-scoped: unlike board elements
+// there's no Postgres mirror, so a room's conversation dies with the room.
+// ---------------------------------------------------------------------------
+
+export const MAX_CHAT_CONTENT_LENGTH = 2000;
+
+/** Optional canvas location attached to a message, in world coordinates. */
+export type ChatCoordinate = Point;
+
+/** What a client sends to post a message. */
+export interface ChatSendRequest {
+    kind: "chat";
+    participantId: string;
+    content: string;
+    coordinate: ChatCoordinate | null;
+}
+
+/**
+ * What the server stores and pushes back out. The author's display name and
+ * theme are resolved server-side from the room's participant hash rather than
+ * taken from the sender, so a client can't post under someone else's name.
+ */
+export interface ChatMessage {
+    kind: "chat";
+    id: string;
+    participantId: string;
+    displayName: string;
+    themeColor: string;
+    content: string;
+    coordinate: ChatCoordinate | null;
+    createdAt: string;
+}
+
+function parseCoordinate(value: unknown): ChatCoordinate | null {
+    return isPoint(value) ? { x: value.x, y: value.y } : null;
+}
+
+export function parseChatSendRequest(raw: unknown): ChatSendRequest | null {
+    if (!isRecord(raw) || raw.kind !== "chat") return null;
+    if (typeof raw.participantId !== "string" || raw.participantId.length === 0) return null;
+    if (typeof raw.content !== "string") return null;
+
+    const content = raw.content.trim();
+    if (content.length === 0 || content.length > MAX_CHAT_CONTENT_LENGTH) return null;
+
+    return {
+        kind: "chat",
+        participantId: raw.participantId,
+        content,
+        coordinate: parseCoordinate(raw.coordinate),
+    };
+}
+
+export function parseChatMessage(raw: unknown): ChatMessage | null {
+    if (!isRecord(raw) || raw.kind !== "chat") return null;
+    if (
+        typeof raw.id !== "string" ||
+        typeof raw.participantId !== "string" ||
+        typeof raw.displayName !== "string" ||
+        typeof raw.themeColor !== "string" ||
+        typeof raw.content !== "string" ||
+        typeof raw.createdAt !== "string"
+    ) {
+        return null;
+    }
+
+    return {
+        kind: "chat",
+        id: raw.id,
+        participantId: raw.participantId,
+        displayName: raw.displayName,
+        themeColor: raw.themeColor,
+        content: raw.content,
+        coordinate: parseCoordinate(raw.coordinate),
+        createdAt: raw.createdAt,
+    };
+}
+
+// ---------------------------------------------------------------------------
 // Runtime validation — JSON.parse gives you `any`; this narrows `unknown`
 // into a real Op (or null) without ever casting through `any`.
 // ---------------------------------------------------------------------------

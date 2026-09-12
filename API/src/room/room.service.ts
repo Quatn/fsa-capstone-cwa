@@ -16,6 +16,14 @@ import { RedisService } from 'src/redis/redis.service';
 import { ApiError } from 'src/common/lib/errors/ApiError';
 import { ParticipantMetadata } from 'src/common/lib/types/dto/ParticipantMetadata';
 import { AllParticipantThemeColors } from 'src/common/lib/types/dto/ParticipantThemeColors';
+import { elementsToHashFields } from './board-element.codec';
+import {
+  ACTIVE_ROOMS_SET_KEY,
+  boardHashKey,
+  roomKey,
+  roomLastFlushedAtKey,
+  roomParticipantsKey,
+} from './room-redis-keys';
 
 @Injectable()
 export class RoomService
@@ -34,18 +42,6 @@ export class RoomService
     @InjectRepository(BoardElementEntity)
     private boardElementRepository: Repository<BoardElementEntity>,
   ) { }
-
-  private roomKey(roomId: string): string {
-    return `room:${roomId}`;
-  }
-
-  private roomParticipantsKey(roomId: string, participantId: string): string {
-    return `room:${roomId}:participants:${participantId}`;
-  }
-
-  private boardElementKey(boardElementId: string): string {
-    return `board-element:${boardElementId}`;
-  }
 
   async findParticipantById(id: string): Promise<ParticipantEntity | null> {
     return await this.participantRepository.findOne({
@@ -92,7 +88,7 @@ export class RoomService
   }
 
   async checkIfRoomIsLoaded(roomId: string): Promise<boolean> {
-    return this.redisService.exists(this.roomKey(roomId));
+    return this.redisService.exists(roomKey(roomId));
   }
 
   async checkParticipantHasJoinedRoom(
@@ -100,7 +96,7 @@ export class RoomService
     participantId: string,
   ): Promise<boolean> {
     return this.redisService.exists(
-      this.roomParticipantsKey(roomId, participantId),
+      roomParticipantsKey(roomId, participantId),
     );
   }
 
@@ -119,16 +115,15 @@ export class RoomService
       );
     }
 
-    await this.redisService.set(this.roomKey(roomId), room.toDto());
+    await this.redisService.set(roomKey(roomId), room.toDto());
 
-    await Promise.all(
-      room.boardElements.map((boardElement) =>
-        this.redisService.set(
-          this.boardElementKey(boardElement.id),
-          boardElement.toDto(),
-        ),
-      ),
-    );
+    const hashFields = elementsToHashFields(room.boardElements);
+    if (Object.keys(hashFields).length > 0) {
+      await this.redisService.hSet(boardHashKey(roomId), hashFields);
+    }
+
+    await this.redisService.sAdd(ACTIVE_ROOMS_SET_KEY, roomId);
+    await this.redisService.set(roomLastFlushedAtKey(roomId), Date.now());
   }
 
   async joinParticipantToRoom(
@@ -169,12 +164,12 @@ export class RoomService
     };
 
     await this.redisService.hSet(
-      this.roomParticipantsKey(roomId, participantId),
+      roomParticipantsKey(roomId, participantId),
       participantMetadata,
     );
   }
 
   async getLoadedRoom(roomId: string): Promise<RoomDto | null> {
-    return this.redisService.get<RoomDto>(this.roomKey(roomId));
+    return this.redisService.get<RoomDto>(roomKey(roomId));
   }
 }

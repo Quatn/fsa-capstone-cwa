@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { BoardElement, ElementType, Op } from "@/types/board";
+import type { BoardElement, ChatCoordinate, ChatMessage, ElementType, Op } from "@/types/board";
 import { BoardTransport, type DatagramHandler } from "@/lib/board/webtransportClient";
 
 export type BoardElementsById = Record<string, BoardElement>;
@@ -20,6 +20,8 @@ interface UseBoardTransportOptions {
     certHashBase64: string;
     /** Which room to join — see server.ts: this rides along on the GET_STATE request. */
     roomId: string;
+    /** Identifies the chat author; the server resolves the name/theme from it. */
+    participantId: string | null;
 }
 
 interface UseBoardTransportResult {
@@ -31,6 +33,9 @@ interface UseBoardTransportResult {
     onDatagram: (handler: DatagramHandler) => () => void;
     /** Raw incoming ops, for anything that needs more than the merged `elements` state (e.g. clearing a remote draft when its owner commits). */
     onOp: (handler: OpHandler) => () => void;
+    /** The room's conversation, oldest first — history on join plus live pushes. */
+    chatMessages: ChatMessage[];
+    sendChat: (content: string, coordinate: ChatCoordinate | null) => void;
     connectionState: ConnectionState;
     clientId: string | null;
 }
@@ -41,11 +46,17 @@ interface UseBoardTransportResult {
  * do inline: connect, join a room + load its initial state, apply pushed
  * ops as they arrive.
  */
-export function useBoardTransport({ url, certHashBase64, roomId }: UseBoardTransportOptions): UseBoardTransportResult {
+export function useBoardTransport({ url, certHashBase64, roomId, participantId }: UseBoardTransportOptions): UseBoardTransportResult {
     const transportRef = useRef<BoardTransport | null>(null);
     const [elements, setElements] = useState<BoardElementsById>({});
+    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
     const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
     const [clientId, setClientId] = useState<string | null>(null);
+
+    const participantIdRef = useRef(participantId);
+    useEffect(() => {
+        participantIdRef.current = participantId;
+    }, [participantId]);
 
     // Subscriber sets for external consumers (BoardCanvas) of onOp/onDatagram.
     // These exist from the very first render, NOT created inside the connect
@@ -85,6 +96,7 @@ export function useBoardTransport({ url, certHashBase64, roomId }: UseBoardTrans
         // Nếu đây là chuyển phòng (không phải lần mount đầu), đừng để phần tử
         // của phòng cũ còn hiện trên màn hình trong lúc phòng mới đang tải.
         setElements({});
+        setChatMessages([]);
         setConnectionState("connecting");
 
         const transport = new BoardTransport();
@@ -100,15 +112,26 @@ export function useBoardTransport({ url, certHashBase64, roomId }: UseBoardTrans
             if (cancelled) return;
             datagramHandlersRef.current.forEach((h) => h(payload));
         });
+        const unsubscribeChat = transport.onChat((message) => {
+            if (cancelled) return;
+            // The server echoes our own messages back too, so guard against a
+            // duplicate if a push ever races the history we loaded on join.
+            setChatMessages((prev) =>
+                prev.some((m) => m.id === message.id) ? prev : [...prev, message],
+            );
+        });
 
         (async () => {
             try {
                 await transport.connect(url, certHashBase64);
-                const raw = await transport.loadState(roomId);
+                // Unmounted mid-handshake: the session is already being torn
+                // down, so asking it for state would only throw.
+                if (cancelled) return;
+                const state = await transport.loadState(roomId);
                 if (cancelled) return;
 
                 const loading: Record<string, LoadingElement> = {};
-                for (const [hashField, entry] of Object.entries(raw)) {
+                for (const [hashField, entry] of Object.entries(state.board)) {
                     const sep = hashField.indexOf(":");
                     const id = hashField.slice(0, sep);
                     const field = hashField.slice(sep + 1);
@@ -125,6 +148,7 @@ export function useBoardTransport({ url, certHashBase64, roomId }: UseBoardTrans
                     loaded[el.id] = { id: el.id, type: el.type, deleted: el.deleted, data: el.data } as BoardElement;
                 }
                 setElements(loaded);
+                setChatMessages(state.chat);
                 setConnectionState("connected");
             } catch (err) {
                 console.error("useBoardTransport: connect/loadState failed", err);
@@ -136,9 +160,11 @@ export function useBoardTransport({ url, certHashBase64, roomId }: UseBoardTrans
             cancelled = true;
             unsubscribeOp();
             unsubscribeDatagram();
+            unsubscribeChat();
+            transport.close();
             transportRef.current = null;
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps -- reconnect only if the endpoint or room itself changes
+        // reconnect only if the endpoint or room itself changes
     }, [url, certHashBase64, roomId, applyOp]);
 
     const sendOp = useCallback((elementId: string, field: string, value: unknown, type?: ElementType) => {
@@ -159,5 +185,24 @@ export function useBoardTransport({ url, certHashBase64, roomId }: UseBoardTrans
         return () => opHandlersRef.current.delete(handler);
     }, []);
 
-    return { elements, setElements, sendOp, sendDatagram, onDatagram, onOp, connectionState, clientId };
+    const sendChat = useCallback((content: string, coordinate: ChatCoordinate | null) => {
+        const participantId = participantIdRef.current;
+        if (!participantId) return; // not authenticated yet — the server would reject it anyway
+        transportRef.current
+            ?.sendChat(participantId, content, coordinate)
+            .catch((err) => console.error("sendChat failed", err));
+    }, []);
+
+    return {
+        elements,
+        setElements,
+        sendOp,
+        sendDatagram,
+        onDatagram,
+        onOp,
+        chatMessages,
+        sendChat,
+        connectionState,
+        clientId,
+    };
 }

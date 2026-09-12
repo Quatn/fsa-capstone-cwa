@@ -1,8 +1,21 @@
 import type Konva from "konva";
 import { clamp, lerp } from "./geometry";
+import type { Point } from "@/types/board";
 
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 4;
+
+/**
+ * Imperative handle BoardCanvas publishes so siblings can read and move the
+ * view without owning the stage — the chat panel needs it to attach "look
+ * here" coordinates and to jump to one someone else sent.
+ */
+export interface BoardCamera {
+    /** World coordinate currently at the centre of the viewport. */
+    getViewportCenter(): Point;
+    /** Pans so `point` ends up centred. Zoom is left alone. */
+    focusOn(point: Point): void;
+}
 
 /**
  * Zooms `stage` by `factor`, keeping the world point under `pointer` (stage/

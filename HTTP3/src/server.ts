@@ -1,8 +1,15 @@
 import { Http3Server } from "@fails-components/webtransport";
 import { readFileSync } from "fs";
-import { createHash, X509Certificate } from "crypto";
+import { createHash, randomUUID, X509Certificate } from "crypto";
 import { createClient } from "redis";
-import { ELEMENT_TYPES, parseOp, type Op } from "./types.js";
+import {
+  ELEMENT_TYPES,
+  parseChatMessage,
+  parseChatSendRequest,
+  parseOp,
+  type ChatMessage,
+  type Op,
+} from "./types.js";
 
 const cert = readFileSync(process.env.HTTP3_CERT_FILE_PATH ?? "./cert.pem");
 const key = readFileSync(process.env.HTTP3_KEY_FILE_PATH ?? "./key.pem");
@@ -54,13 +61,27 @@ function joinRoom(session: any, roomId: string): void {
   console.log(`session joined room "${roomId}" (${rooms.get(roomId)!.sessions.size} in room now)`);
 }
 
+const ROOM_CLOSE_DEBOUNCE_MS = Number(process.env.ROOM_CLOSE_DEBOUNCE_MS ?? 5000);
+
 function leaveRoom(session: any): void {
   const roomId = sessionRoomId.get(session);
   if (!roomId) return;
   const room = rooms.get(roomId);
   room?.sessions.delete(session);
   sessionRoomId.delete(session);
-  if (room && room.sessions.size === 0) rooms.delete(roomId);
+  if (room && room.sessions.size === 0) {
+    rooms.delete(roomId);
+    // Debounce: a quick refresh/reconnect shouldn't trigger a flush+evict in
+    // the API — only announce the room as closed if it's still empty after a
+    // short grace period.
+    setTimeout(() => {
+      if (!rooms.has(roomId)) {
+        redis.publish("room:closed", JSON.stringify({ roomId })).catch((err) =>
+          console.error("failed to publish room:closed:", err),
+        );
+      }
+    }, ROOM_CLOSE_DEBOUNCE_MS);
+  }
 }
 
 const TOMBSTONE_TTL_MS = Number(process.env.TOMBSTONE_TTL_MS ?? 24 * 60 * 60 * 1000); // 24h
@@ -130,6 +151,78 @@ async function sweepRoomTombstones(roomKey: string): Promise<void> {
   }
 }
 
+const CHAT_HISTORY_LIMIT = Number(process.env.CHAT_HISTORY_LIMIT ?? 200);
+
+function chatKeyFor(roomId: string): string {
+  return `chat:${roomId}`;
+}
+
+function participantKeyFor(roomId: string, participantId: string): string {
+  return `room:${roomId}:participants:${participantId}`;
+}
+
+/** The room's conversation so far, oldest first. Skips anything unparseable. */
+async function readChatHistory(roomId: string): Promise<ChatMessage[]> {
+  const entries = await redis.lRange(chatKeyFor(roomId), 0, -1);
+  const messages: ChatMessage[] = [];
+  for (const entry of entries) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(entry);
+    } catch {
+      continue;
+    }
+    const message = parseChatMessage(parsed);
+    if (message) messages.push(message);
+  }
+  return messages;
+}
+
+async function handleChatMessage(raw: unknown, roomId: string): Promise<void> {
+  const request = parseChatSendRequest(raw);
+  if (!request) {
+    console.log("dropped: invalid chat message");
+    return;
+  }
+
+  // Display name and theme are read from the participant hash the API wrote
+  // at join time, never taken from the sender — otherwise a client could post
+  // under anyone's name. An unknown participant simply can't post.
+  const participant = await redis.hGetAll(
+    participantKeyFor(roomId, request.participantId),
+  );
+  if (!participant?.displayName) {
+    console.log(`dropped: chat from unknown participant ${request.participantId}`);
+    return;
+  }
+
+  const message: ChatMessage = {
+    kind: "chat",
+    id: randomUUID(),
+    participantId: request.participantId,
+    displayName: participant.displayName,
+    themeColor: participant.themeColor ?? "blue",
+    content: request.content,
+    coordinate: request.coordinate,
+    createdAt: new Date().toISOString(),
+  };
+
+  const chatKey = chatKeyFor(roomId);
+  await redis.rPush(chatKey, JSON.stringify(message));
+  await redis.lTrim(chatKey, -CHAT_HISTORY_LIMIT, -1);
+
+  console.log(`chat    [${roomId}] ${message.displayName}: ${message.content.slice(0, 60)}`);
+
+  // Broadcast with no exclusion, so the sender renders the server's copy too:
+  // everyone ends up with the same id, timestamp and ordering, and the client
+  // needs no optimistic-echo de-duplication.
+  await broadcastStreamOp(
+    new TextEncoder().encode(JSON.stringify(message)),
+    null,
+    roomId,
+  );
+}
+
 async function broadcastStreamOp(payload: Uint8Array, exclude: any, roomId: string): Promise<void> {
   const room = rooms.get(roomId);
   if (!room) return;
@@ -168,6 +261,12 @@ async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: an
     raw = JSON.parse(rawBytes.toString("utf-8"));
   } catch {
     console.log("dropped: invalid JSON");
+    return;
+  }
+
+  // Chat rides the same reliable stream as board ops; `kind` tells them apart.
+  if (typeof raw === "object" && raw !== null && (raw as Record<string, unknown>).kind === "chat") {
+    await handleChatMessage(raw, roomId);
     return;
   }
 
@@ -228,9 +327,14 @@ async function handleReadStream(stream: any, session: any): Promise<void> {
     const req = parseJoinAndGetStateRequest(new TextDecoder().decode(value));
     if (req) {
       joinRoom(session, req.roomId);
-      const all = await redis.hGetAll(roomKeyFor(req.roomId));
-      await writer.write(new TextEncoder().encode(JSON.stringify(all)));
-      console.log(`sent state [${req.roomId}] (${Object.keys(all).length} fields)`);
+      const [board, chat] = await Promise.all([
+        redis.hGetAll(roomKeyFor(req.roomId)),
+        readChatHistory(req.roomId),
+      ]);
+      await writer.write(new TextEncoder().encode(JSON.stringify({ board, chat })));
+      console.log(
+        `sent state [${req.roomId}] (${Object.keys(board).length} fields, ${chat.length} chat)`,
+      );
     } else {
       console.log("dropped: invalid GET_STATE request");
     }
