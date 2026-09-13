@@ -7,14 +7,20 @@ import { useBoardTool, type BoardTool } from "@/context/BoardToolContext";
 import type { BoardElementsById, OpHandler } from "@/hooks/useBoardTransport";
 import { useUndoRedo } from "@/hooks/useUndoRedo";
 import { ElementRenderer } from "./ElementRenderer";
+import { TextEditor } from "./TextEditor";
 import {
   boxFromDrag,
   diamondPoints,
   flattenPoints,
 } from "@/lib/board/geometry";
-import { zoomStageAtPointer } from "@/lib/board/camera";
-import type { BoardElement, ElementType, Point } from "@/types/board";
-import type { Dispatch, SetStateAction } from "react";
+import {
+  focusStageOn,
+  zoomStageAtPointer,
+  type BoardCamera,
+} from "@/lib/board/camera";
+import { minTextBoxSize, textHeightAtWidth } from "@/lib/board/text";
+import type { BoardElement, ElementType, Point, TextData } from "@/types/board";
+import type { Dispatch, RefObject, SetStateAction } from "react";
 
 const SHAPE_TYPES: readonly BoardTool[] = ["rectangle", "diamond", "ellipse"];
 const LINEAR_TYPES: readonly BoardTool[] = ["line", "freedraw"];
@@ -51,6 +57,8 @@ interface BoardCanvasProps {
   onDatagram: (handler: (payload: unknown) => void) => () => void;
   onOp: (handler: OpHandler) => () => void;
   clientId: string | null;
+  /** Populated with a camera handle while mounted, for the chat panel's use. */
+  cameraRef?: RefObject<BoardCamera | null>;
 }
 
 export function BoardCanvas({
@@ -61,6 +69,7 @@ export function BoardCanvas({
   onDatagram,
   onOp,
   clientId,
+  cameraRef,
 }: BoardCanvasProps) {
   const { tool, color, fontSize, selectedId, setSelectedId } = useBoardTool();
 
@@ -79,22 +88,70 @@ export function BoardCanvas({
   }, [elements]);
 
   const [size, setSize] = useState({ width: 1200, height: 800 });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  // The textarea overlay is positioned in screen pixels, so it needs the
+  // camera as React state. The stage's own transform changes outside React
+  // (wheel zoom, pan drag), hence the explicit sync — kept to while an editor
+  // is actually open, since otherwise nothing re-renders on camera moves.
+  const [camera, setCamera] = useState({ scale: 1, x: 0, y: 0 });
+  const editingIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    editingIdRef.current = editingId;
+  }, [editingId]);
+
+  const syncCamera = useCallback(() => {
+    const stage = stageRef.current;
+    if (!stage) return;
+    setCamera({ scale: stage.scaleX(), x: stage.x(), y: stage.y() });
+  }, []);
+
+  useEffect(() => {
+    if (!cameraRef) return;
+    cameraRef.current = {
+      getViewportCenter() {
+        const stage = stageRef.current;
+        if (!stage) return { x: 0, y: 0 };
+        // Screen centre back through the camera transform into world space.
+        return {
+          x: (stage.width() / 2 - stage.x()) / stage.scaleX(),
+          y: (stage.height() / 2 - stage.y()) / stage.scaleY(),
+        };
+      },
+      focusOn(point) {
+        const stage = stageRef.current;
+        if (stage) void focusStageOn(stage, point);
+      },
+    };
+    return () => {
+      cameraRef.current = null;
+    };
+  }, [cameraRef]);
+
   const [drawStart, setDrawStart] = useState<Point | null>(null);
   const [drawCurrent, setDrawCurrent] = useState<Point | null>(null);
   const [strokePoints, setStrokePoints] = useState<Point[] | null>(null);
   const [remoteCursors, setRemoteCursors] = useState<Record<string, Point>>({});
   const [remoteDrafts, setRemoteDrafts] = useState<Record<string, Point[]>>({});
 
-  // Full-window responsive stage — the viewport is just whatever fits the
-  // browser; "infinite" comes from the camera (stage scale/position), not
-  // from the stage element itself.
+  // The stage fills its container, not the window — the board sits under a
+  // header, so the two differ, and measuring the window would push the bottom
+  // of the canvas out of view and skew every viewport-centre calculation.
+  // "Infinite" comes from the camera (stage scale/position), not this size.
   useEffect(() => {
+    const container = stageRef.current?.container()?.parentElement;
+    if (!container) return;
+
     function updateSize() {
-      setSize({ width: window.innerWidth, height: window.innerHeight });
+      setSize({
+        width: container!.clientWidth,
+        height: container!.clientHeight,
+      });
     }
     updateSize();
-    window.addEventListener("resize", updateSize);
-    return () => window.removeEventListener("resize", updateSize);
+
+    const observer = new ResizeObserver(updateSize);
+    observer.observe(container);
+    return () => observer.disconnect();
   }, []);
 
   // Transformer (resize handles) follows the current selection, for the
@@ -104,13 +161,19 @@ export function BoardCanvas({
     if (!tr) return;
     const el = selectedId ? elements[selectedId] : null;
     const node = selectedId ? nodeRefs.current[selectedId] : null;
-    if (el && node && RESIZABLE_TYPES.includes(el.type)) {
+    // Resize handles would sit on top of the textarea while editing.
+    if (
+      el &&
+      node &&
+      el.id !== editingId &&
+      RESIZABLE_TYPES.includes(el.type)
+    ) {
       tr.nodes([node]);
     } else {
       tr.nodes([]);
     }
     tr.getLayer()?.batchDraw();
-  }, [selectedId, elements]);
+  }, [selectedId, elements, editingId]);
 
   // Cursor/draft datagrams from other clients — same channel the demo used,
   // no Redis involved, drawn as a dashed preview / a small ring. Keyed by
@@ -259,7 +322,7 @@ export function BoardCanvas({
       data: Record<string, unknown>,
       fields: readonly string[],
     ) => {
-      const id = crypto.randomUUID().slice(0, 8);
+      const id = crypto.randomUUID();
       setElements((prev) => ({
         ...prev,
         [id]: { id, type, deleted: false, data } as BoardElement,
@@ -272,8 +335,61 @@ export function BoardCanvas({
         type,
         deletedAfter: false,
       });
+      return id;
     },
     [setElements, setSelectedId, sendOp, record],
+  );
+
+  const handleStartEdit = useCallback(
+    (id: string) => {
+      if (tool !== "select") return; // the text tool is busy drawing new boxes
+      setSelectedId(id);
+      syncCamera();
+      setEditingId(id);
+    },
+    [tool, setSelectedId, syncCamera],
+  );
+
+  const handleCommitText = useCallback(
+    (text: string) => {
+      const id = editingId;
+      setEditingId(null);
+      if (!id) return;
+
+      const el = elementsRef.current[id];
+      if (!el || el.type !== "text") return;
+      const data = el.data as Partial<TextData>;
+
+      if (!text.trim()) {
+        // Nothing to show, and an empty box has no hit area to click back
+        // into — drop it, the way Paint discards a text box you leave blank.
+        setSelectedId((s) => (s === id ? null : s));
+        setDeleted(id, true);
+        record({
+          kind: "toggleDeleted",
+          elementId: id,
+          type: "text",
+          deletedAfter: true,
+        });
+        return;
+      }
+
+      const changes: Record<string, unknown> = {};
+      if (text !== data.text) changes.text = text;
+
+      // Typing more than fits has to grow the box, otherwise the overflow is
+      // simply clipped — the resize clamp only guards the other direction.
+      const node = nodeRefs.current[id] as Konva.Text | undefined;
+      if (node && data.size) {
+        const neededHeight = textHeightAtWidth(node, data.size.width, text);
+        if (neededHeight > data.size.height) {
+          changes.size = { width: data.size.width, height: neededHeight };
+        }
+      }
+
+      if (Object.keys(changes).length > 0) commitFields(id, "text", changes);
+    },
+    [editingId, commitFields, setDeleted, record, setSelectedId],
   );
 
   const getWorldPointer = useCallback((): Point | null => {
@@ -297,14 +413,22 @@ export function BoardCanvas({
     [sendDatagram, clientId],
   );
 
-  const handleWheel = useCallback((e: Konva.KonvaEventObject<WheelEvent>) => {
-    e.evt.preventDefault();
-    const stage = stageRef.current;
-    const pointer = stage?.getPointerPosition();
-    if (!stage || !pointer) return;
-    const factor = e.evt.deltaY > 0 ? 0.9 : 1.1;
-    zoomStageAtPointer(stage, pointer, factor);
-  }, []);
+  const handleWheel = useCallback(
+    (e: Konva.KonvaEventObject<WheelEvent>) => {
+      e.evt.preventDefault();
+      const stage = stageRef.current;
+      const pointer = stage?.getPointerPosition();
+      if (!stage || !pointer) return;
+      const factor = e.evt.deltaY > 0 ? 0.9 : 1.1;
+      zoomStageAtPointer(stage, pointer, factor);
+      if (editingIdRef.current) syncCamera();
+    },
+    [syncCamera],
+  );
+
+  const handleStageDragMove = useCallback(() => {
+    if (editingIdRef.current) syncCamera();
+  }, [syncCamera]);
 
   const handleStageMouseDown = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
@@ -353,13 +477,15 @@ export function BoardCanvas({
       if (boxSize.width < minSize || boxSize.height < minSize) return;
 
       if (tool === "text") {
-        const text = window.prompt("Nội dung textbox:");
-        if (!text || !text.trim()) return;
-        createElement(
+        // Drag lays out an empty box and drops the caret straight into it,
+        // like Paint — the content is typed on the canvas, not in a dialog.
+        const id = createElement(
           "text",
-          { position, size: boxSize, text, color, fontSize },
+          { position, size: boxSize, text: "", color, fontSize },
           ["position", "size", "text", "color", "fontSize"],
         );
+        syncCamera();
+        setEditingId(id);
       } else if (isElementType(tool)) {
         createElement(
           tool,
@@ -393,105 +519,155 @@ export function BoardCanvas({
     color,
     fontSize,
     createElement,
+    syncCamera,
   ]);
 
-  return (
-    <Stage
-      ref={stageRef}
-      width={size.width}
-      height={size.height}
-      draggable={tool === "pan"}
-      onWheel={handleWheel}
-      onMouseDown={handleStageMouseDown}
-      onMouseMove={handleStageMouseMove}
-      onMouseUp={handleStageMouseUp}
-    >
-      <Layer>
-        {Object.values(elements)
-          .filter((el) => !el.deleted)
-          .map((el) => (
-            <ElementRenderer
-              key={el.id}
-              element={el}
-              selected={el.id === selectedId}
-              draggable={tool === "select"}
-              registerNode={registerNode}
-              onSelect={handleSelect}
-              onCommitFields={commitFields}
-            />
-          ))}
+  const editingElement = editingId ? elements[editingId] : null;
+  const editingData =
+    editingElement?.type === "text"
+      ? (editingElement.data as Partial<TextData>)
+      : null;
 
-        {/* preview of whatever the local user is currently drawing */}
-        {drawStart &&
-          drawCurrent &&
-          (() => {
-            const { position, size: boxSize } = boxFromDrag(
-              drawStart,
-              drawCurrent,
-            );
-            if (tool === "diamond") {
+  return (
+    <>
+      <Stage
+        ref={stageRef}
+        width={size.width}
+        height={size.height}
+        draggable={tool === "pan"}
+        onWheel={handleWheel}
+        onDragMove={handleStageDragMove}
+        onMouseDown={handleStageMouseDown}
+        onMouseMove={handleStageMouseMove}
+        onMouseUp={handleStageMouseUp}
+      >
+        <Layer>
+          {Object.values(elements)
+            .filter((el) => !el.deleted)
+            .map((el) => (
+              <ElementRenderer
+                key={el.id}
+                element={el}
+                selected={el.id === selectedId}
+                draggable={tool === "select"}
+                editing={el.id === editingId}
+                registerNode={registerNode}
+                onSelect={handleSelect}
+                onStartEdit={handleStartEdit}
+                onCommitFields={commitFields}
+              />
+            ))}
+
+          {/* preview of whatever the local user is currently drawing */}
+          {drawStart &&
+            drawCurrent &&
+            (() => {
+              const { position, size: boxSize } = boxFromDrag(
+                drawStart,
+                drawCurrent,
+              );
+              if (tool === "diamond") {
+                return (
+                  <Line
+                    x={position.x}
+                    y={position.y}
+                    points={diamondPoints(boxSize.width, boxSize.height)}
+                    closed
+                    stroke="#9ca3af"
+                    dash={[4, 4]}
+                    listening={false}
+                  />
+                );
+              }
               return (
-                <Line
+                <Rect
                   x={position.x}
                   y={position.y}
-                  points={diamondPoints(boxSize.width, boxSize.height)}
-                  closed
+                  width={boxSize.width}
+                  height={boxSize.height}
                   stroke="#9ca3af"
                   dash={[4, 4]}
                   listening={false}
                 />
               );
-            }
-            return (
-              <Rect
-                x={position.x}
-                y={position.y}
-                width={boxSize.width}
-                height={boxSize.height}
-                stroke="#9ca3af"
-                dash={[4, 4]}
-                listening={false}
-              />
-            );
-          })()}
-        {strokePoints && strokePoints.length > 1 && (
-          <Line
-            points={flattenPoints(strokePoints)}
-            stroke="#9ca3af"
-            dash={[4, 4]}
-            strokeWidth={2}
-            listening={false}
-          />
-        )}
+            })()}
+          {strokePoints && strokePoints.length > 1 && (
+            <Line
+              points={flattenPoints(strokePoints)}
+              stroke="#9ca3af"
+              dash={[4, 4]}
+              strokeWidth={2}
+              listening={false}
+            />
+          )}
 
-        {/* other clients' in-progress line/freedraw strokes + cursor, via datagram */}
-        {Object.entries(remoteDrafts).map(
-          ([authorId, pts]) =>
-            pts.length > 1 && (
-              <Line
-                key={authorId}
-                points={flattenPoints(pts)}
-                stroke="#9ca3af"
-                dash={[4, 4]}
-                strokeWidth={2}
-                listening={false}
-              />
-            ),
-        )}
-        {Object.entries(remoteCursors).map(([id, pos]) => (
-          <Circle
-            key={id}
-            x={pos.x}
-            y={pos.y}
-            radius={8}
-            stroke="#d97706"
-            dash={[3, 3]}
-            listening={false}
-          />
-        ))}
+          {/* other clients' in-progress line/freedraw strokes + cursor, via datagram */}
+          {Object.entries(remoteDrafts).map(
+            ([authorId, pts]) =>
+              pts.length > 1 && (
+                <Line
+                  key={authorId}
+                  points={flattenPoints(pts)}
+                  stroke="#9ca3af"
+                  dash={[4, 4]}
+                  strokeWidth={2}
+                  listening={false}
+                />
+              ),
+          )}
+          {Object.entries(remoteCursors).map(([id, pos]) => (
+            <Circle
+              key={id}
+              x={pos.x}
+              y={pos.y}
+              radius={8}
+              stroke="#d97706"
+              dash={[3, 3]}
+              listening={false}
+            />
+          ))}
 
-        <Transformer ref={transformerRef} rotateEnabled={false} />
-      </Layer>
-    </Stage>
+          <Transformer
+            ref={transformerRef}
+            rotateEnabled={false}
+            boundBoxFunc={(oldBox, newBox) => {
+              // Stop a text box being dragged smaller than the text it holds.
+              // Rejecting the whole frame (returning oldBox) rather than just
+              // clamping the width keeps the box's position pinned too —
+              // clamping alone lets the dragged edge run away from the box.
+              const el = selectedId ? elementsRef.current[selectedId] : null;
+              if (!selectedId || el?.type !== "text") return newBox;
+              const node = nodeRefs.current[selectedId] as
+                Konva.Text | undefined;
+              if (!node) return newBox;
+
+              // boundBox is in screen pixels, element geometry in world units.
+              const scale = stageRef.current?.scaleX() ?? 1;
+              const minimum = minTextBoxSize(node);
+              if (newBox.width < minimum.width * scale) return oldBox;
+
+              const minHeight = textHeightAtWidth(node, newBox.width / scale);
+              if (newBox.height < minHeight * scale) return oldBox;
+
+              return newBox;
+            }}
+          />
+        </Layer>
+      </Stage>
+
+      {editingId && editingData?.position && editingData.size && (
+        <TextEditor
+          key={editingId}
+          initialText={editingData.text ?? ""}
+          position={editingData.position}
+          size={editingData.size}
+          color={editingData.color ?? "#1f2937"}
+          fontSize={editingData.fontSize ?? 16}
+          stageScale={camera.scale}
+          stageOffset={{ x: camera.x, y: camera.y }}
+          onCommit={handleCommitText}
+        />
+      )}
+    </>
   );
 }

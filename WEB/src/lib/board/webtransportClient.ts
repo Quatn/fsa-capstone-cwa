@@ -1,8 +1,15 @@
-import type { ElementType, Op } from "@/types/board";
-import { parseOp } from "@/types/board";
+import type { ChatCoordinate, ChatMessage, ElementType, Op } from "@/types/board";
+import { parseChatMessage, parseOp } from "@/types/board";
 
 export type OpHandler = (op: Op) => void;
 export type DatagramHandler = (payload: unknown) => void;
+export type ChatHandler = (message: ChatMessage) => void;
+
+/** GET_STATE hands back the board and the room's chat log in one round trip. */
+export interface BoardState {
+    board: Record<string, RawStateEntry>;
+    chat: ChatMessage[];
+}
 
 /** Shape of one Redis hash entry as returned by the server's GET_STATE reply. */
 export interface RawStateEntry {
@@ -52,7 +59,8 @@ function parseStoredField(raw: string): RawStateEntry | null {
  * Thin wrapper around the browser WebTransport API, carrying exactly the
  * three channels the HTTP3 server exposes (see /HTTP3/server.ts):
  *  - unidirectional streams for reliable, CRDT-merged field ops
- *  - one bidirectional stream per GET_STATE request
+ *  - one bidirectional stream per GET_STATE request (which also declares
+ *    which room this session belongs to — see loadState below)
  *  - datagrams for cursor/draft broadcasts (no Redis, no ordering guarantee)
  *
  * Deliberately has no React/Konva knowledge — `useBoardTransport` is the
@@ -62,8 +70,11 @@ export class BoardTransport {
     readonly clientId: string = crypto.randomUUID().slice(0, 8);
 
     private transport: WebTransport | null = null;
+    private connected = false;
+    private closeRequested = false;
     private readonly opHandlers = new Set<OpHandler>();
     private readonly datagramHandlers = new Set<DatagramHandler>();
+    private readonly chatHandlers = new Set<ChatHandler>();
 
     async connect(url: string, certHashBase64: string): Promise<void> {
         const transport = new WebTransport(url, {
@@ -74,11 +85,40 @@ export class BoardTransport {
                 },
             ],
         });
-        await transport.ready;
         this.transport = transport;
+        await transport.ready;
+        this.connected = true;
+
+        // A caller that gave up during the handshake couldn't close the
+        // session then (see close below) — honour it now that it's legal.
+        if (this.closeRequested) {
+            this.teardown();
+            return;
+        }
 
         this.listenForPushedOps();
         this.listenForDatagrams();
+    }
+
+    /**
+     * Ends the session. The server only learns a client left when the
+     * underlying connection closes (`session.closed` -> leaveRoom in
+     * server.ts), which is what eventually triggers the room's final flush to
+     * Postgres — so leaving this uncalled strands the room as "active".
+     *
+     * Safe to call at any point: WebTransport throws on close() while the
+     * handshake is still in flight (which React does on every StrictMode
+     * double-mount), so that case defers to connect() instead of closing here.
+     */
+    close(): void {
+        this.closeRequested = true;
+        if (this.connected) this.teardown();
+    }
+
+    private teardown(): void {
+        this.transport?.close();
+        this.transport = null;
+        this.connected = false;
     }
 
     onOp(handler: OpHandler): () => void {
@@ -89,6 +129,25 @@ export class BoardTransport {
     onDatagram(handler: DatagramHandler): () => void {
         this.datagramHandlers.add(handler);
         return () => this.datagramHandlers.delete(handler);
+    }
+
+    onChat(handler: ChatHandler): () => void {
+        this.chatHandlers.add(handler);
+        return () => this.chatHandlers.delete(handler);
+    }
+
+    /**
+     * Posts a chat message. Nothing is echoed locally on purpose — the server
+     * stamps the id, timestamp and author, then pushes the result back to
+     * everyone including us, so every client shows the same thing.
+     */
+    async sendChat(participantId: string, content: string, coordinate: ChatCoordinate | null): Promise<void> {
+        if (!this.transport) throw new Error("BoardTransport: not connected");
+        const request = { kind: "chat", participantId, content, coordinate };
+        const stream = await this.transport.createUnidirectionalStream();
+        const writer = stream.getWriter();
+        await writer.write(new TextEncoder().encode(JSON.stringify(request)));
+        await writer.close();
     }
 
     /** `type` is omitted for the one field that isn't tied to an element type: "deleted". */
@@ -114,22 +173,41 @@ export class BoardTransport {
         }
     }
 
-    /** One round trip over a fresh bidirectional stream, mirrors the server's GET_STATE handler. */
-    async loadState(): Promise<Record<string, RawStateEntry>> {
+    /**
+     * One round trip over a fresh bidirectional stream. Doubles as both
+     * "give me this room's current state" AND "put this session in that
+     * room" — the server does both from the same request (see
+     * `handleReadStream` in server.ts) since there's no reliable way to pass
+     * a dynamic roomId through the WebTransport connection URL itself.
+     * Safe to call again later for the same room (e.g. a manual resync) —
+     * joining a room you're already in is a no-op server-side.
+     */
+    async loadState(roomId: string): Promise<BoardState> {
         if (!this.transport) throw new Error("BoardTransport: not connected");
         const stream = await this.transport.createBidirectionalStream();
         const writer = stream.writable.getWriter();
-        await writer.write(new TextEncoder().encode("GET_STATE"));
+        await writer.write(new TextEncoder().encode(JSON.stringify({ cmd: "GET_STATE", roomId })));
         const bytes = await readAll(stream.readable as ReadableStream<Uint8Array>);
         await writer.close();
 
-        const raw = JSON.parse(new TextDecoder().decode(bytes)) as Record<string, string>;
-        const result: Record<string, RawStateEntry> = {};
-        for (const [hashField, fieldDataRaw] of Object.entries(raw)) {
+        const reply = JSON.parse(new TextDecoder().decode(bytes)) as {
+            board?: Record<string, string>;
+            chat?: unknown[];
+        };
+
+        const board: Record<string, RawStateEntry> = {};
+        for (const [hashField, fieldDataRaw] of Object.entries(reply.board ?? {})) {
             const parsed = parseStoredField(fieldDataRaw);
-            if (parsed) result[hashField] = parsed;
+            if (parsed) board[hashField] = parsed;
         }
-        return result;
+
+        const chat: ChatMessage[] = [];
+        for (const entry of reply.chat ?? []) {
+            const message = parseChatMessage(entry);
+            if (message) chat.push(message);
+        }
+
+        return { board, chat };
     }
 
     private listenForPushedOps(): void {
@@ -145,6 +223,12 @@ export class BoardTransport {
                 try {
                     raw = JSON.parse(new TextDecoder().decode(bytes));
                 } catch {
+                    continue;
+                }
+                // The same push channel carries both board ops and chat.
+                const message = parseChatMessage(raw);
+                if (message) {
+                    this.chatHandlers.forEach((h) => h(message));
                     continue;
                 }
                 const op = parseOp(raw);

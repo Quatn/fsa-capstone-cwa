@@ -75,7 +75,37 @@ export class RedisService implements OnModuleInit, OnModuleDestroy {
     await this.client.sRem(key, value);
   }
 
+  async sMembers(key: string): Promise<string[]> {
+    return await this.client.sMembers(key);
+  }
+
+  /** Every key matching `pattern`, gathered over a non-blocking SCAN. */
+  async scanKeys(pattern: string): Promise<string[]> {
+    const found: string[] = [];
+    for await (const keys of this.client.scanIterator({
+      MATCH: pattern,
+      COUNT: 100,
+    })) {
+      found.push(...keys);
+    }
+    return found;
+  }
+
   async expire(key: string, seconds: number): Promise<void> {
     await this.client.expire(key, seconds);
+  }
+
+  async subscribe(
+    channel: string,
+    handler: (message: string) => void,
+  ): Promise<void> {
+    // A client used for regular commands can't also block on subscriptions
+    // in redis v4, so subscriptions get their own connection.
+    const subscriber = this.client.duplicate();
+    subscriber.on('error', (error) => {
+      console.error(`Redis subscriber error (${channel})`, error);
+    });
+    await subscriber.connect();
+    await subscriber.subscribe(channel, handler);
   }
 }
