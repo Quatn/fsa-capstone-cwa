@@ -74,11 +74,18 @@ export class Session {
     return this.transport.datagrams.maxDatagramSize ?? 0;
   }
 
-  /** GET_STATE: puts this session in the room and returns its board and chat. */
-  async getState(roomId: string): Promise<RoomState> {
+  /**
+   * GET_STATE: puts this session in the room and returns its board and chat.
+   * With an identity it's also listed in the room's presence, so the bot's
+   * cursor shows up under its name exactly as a person's does.
+   */
+  async getState(
+    roomId: string,
+    identity?: { clientId: string; participantId: string },
+  ): Promise<RoomState> {
     const stream = await this.transport.createBidirectionalStream();
     const writer = stream.writable.getWriter();
-    await writer.write(encode({ cmd: "GET_STATE", roomId }));
+    await writer.write(encode({ cmd: "GET_STATE", roomId, ...identity }));
     const bytes = await readAll(stream.readable);
     await writer.close();
 

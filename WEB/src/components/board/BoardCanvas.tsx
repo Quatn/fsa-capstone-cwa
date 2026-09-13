@@ -1,15 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  Circle,
-  Group,
-  Layer,
-  Line,
-  Rect,
-  Stage,
-  Transformer,
-} from "react-konva";
+import { Group, Layer, Line, Rect, Stage, Transformer } from "react-konva";
 import type Konva from "konva";
 import { useBoardTool, type BoardTool } from "@/context/BoardToolContext";
 import type { BoardElementsById, OpHandler } from "@/hooks/useBoardTransport";
@@ -22,9 +14,12 @@ import {
   flattenPoints,
 } from "@/lib/board/geometry";
 import {
+  applyView,
   focusStageOn,
+  viewOf,
   zoomStageAtPointer,
   type BoardCamera,
+  type CameraStore,
 } from "@/lib/board/camera";
 import { minTextBoxSize, textHeightAtWidth } from "@/lib/board/text";
 import type { BoardElement, ElementType, Point, TextData } from "@/types/board";
@@ -45,10 +40,8 @@ function isElementType(tool: BoardTool): tool is ElementType {
 }
 
 interface DatagramPayload {
-  type?: "draft" | "cursor";
+  type?: string;
   clientId?: string;
-  x?: number;
-  y?: number;
   points?: Point[];
 }
 
@@ -65,8 +58,12 @@ interface BoardCanvasProps {
   onDatagram: (handler: (payload: unknown) => void) => () => void;
   onOp: (handler: OpHandler) => () => void;
   clientId: string | null;
-  /** Populated with a camera handle while mounted, for the chat panel's use. */
+  /** Populated with a camera handle while mounted, for the chat panel and following. */
   cameraRef?: RefObject<BoardCamera | null>;
+  /** Fed with every camera change, so HTML overlays can follow the stage. */
+  cameraStore: CameraStore;
+  /** Called when the user pans or zooms by hand; following someone ends there. */
+  onCameraGesture?: () => void;
 }
 
 export function BoardCanvas({
@@ -78,6 +75,8 @@ export function BoardCanvas({
   onOp,
   clientId,
   cameraRef,
+  cameraStore,
+  onCameraGesture,
 }: BoardCanvasProps) {
   const { tool, color, fontSize, selectedId, setSelectedId } = useBoardTool();
 
@@ -97,21 +96,29 @@ export function BoardCanvas({
 
   const [size, setSize] = useState({ width: 1200, height: 800 });
   const [editingId, setEditingId] = useState<string | null>(null);
-  // The textarea overlay is positioned in screen pixels, so it needs the
-  // camera as React state. The stage's own transform changes outside React
-  // (wheel zoom, pan drag), hence the explicit sync — kept to while an editor
-  // is actually open, since otherwise nothing re-renders on camera moves.
-  const [camera, setCamera] = useState({ scale: 1, x: 0, y: 0 });
-  const editingIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    editingIdRef.current = editingId;
-  }, [editingId]);
 
-  const syncCamera = useCallback(() => {
+  // Mirrors the camera into the store. Whatever moves it (wheel zoom, a pan
+  // drag, the chat's jump-to-location animation, following someone) ends in
+  // one of these attribute setters, so one listener covers every case.
+  // Published once per frame, in step with Konva's own batched redraw.
+  useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
-    setCamera({ scale: stage.scaleX(), x: stage.x(), y: stage.y() });
-  }, []);
+    let frame = 0;
+    const publish = () => {
+      frame = 0;
+      cameraStore.set({ scale: stage.scaleX(), x: stage.x(), y: stage.y() });
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(publish);
+    };
+    stage.on("xChange.camera yChange.camera scaleXChange.camera", schedule);
+    publish();
+    return () => {
+      stage.off(".camera");
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [cameraStore]);
 
   useEffect(() => {
     if (!cameraRef) return;
@@ -119,15 +126,20 @@ export function BoardCanvas({
       getViewportCenter() {
         const stage = stageRef.current;
         if (!stage) return { x: 0, y: 0 };
-        // Screen centre back through the camera transform into world space.
-        return {
-          x: (stage.width() / 2 - stage.x()) / stage.scaleX(),
-          y: (stage.height() / 2 - stage.y()) / stage.scaleY(),
-        };
+        const { x, y } = viewOf(stage);
+        return { x, y };
       },
       focusOn(point) {
         const stage = stageRef.current;
         if (stage) void focusStageOn(stage, point);
+      },
+      getView() {
+        const stage = stageRef.current;
+        return stage ? viewOf(stage) : { x: 0, y: 0, scale: 1 };
+      },
+      setView(view) {
+        const stage = stageRef.current;
+        if (stage) applyView(stage, view);
       },
     };
     return () => {
@@ -138,7 +150,6 @@ export function BoardCanvas({
   const [drawStart, setDrawStart] = useState<Point | null>(null);
   const [drawCurrent, setDrawCurrent] = useState<Point | null>(null);
   const [strokePoints, setStrokePoints] = useState<Point[] | null>(null);
-  const [remoteCursors, setRemoteCursors] = useState<Record<string, Point>>({});
   const [remoteDrafts, setRemoteDrafts] = useState<Record<string, Point[]>>({});
 
   // The stage fills its container, not the window — the board sits under a
@@ -183,37 +194,25 @@ export function BoardCanvas({
     tr.getLayer()?.batchDraw();
   }, [selectedId, elements, editingId]);
 
-  // Cursor/draft datagrams from other clients — same channel the demo used,
-  // no Redis involved, drawn as a dashed preview / a small ring. Keyed by
-  // clientId so each remote client gets their own tracked cursor/draft
-  // (also what a later "name label per cursor" feature will hang off of).
+  // Other clients' in-progress line/freedraw strokes, via datagram, drawn as a
+  // dashed preview. Their cursors and name tags are RemoteCursors' job.
   useEffect(() => {
     return onDatagram((payload) => {
       const msg = payload as DatagramPayload;
       if (!msg.clientId) return; // dữ liệu cũ/hỏng, không rõ của ai — bỏ qua
+      const authorId = msg.clientId;
       if (msg.type === "draft" && msg.points) {
-        setRemoteDrafts((prev) => ({
-          ...prev,
-          [msg.clientId as string]: msg.points as Point[],
-        }));
-        // client này đang vẽ, không còn "chỉ di chuột" — bỏ vòng tròn con trỏ cũ đi
-        setRemoteCursors((prev) => {
-          if (!((msg.clientId as string) in prev)) return prev;
-          const next = { ...prev };
-          delete next[msg.clientId as string];
-          return next;
-        });
-      } else if (typeof msg.x === "number" && typeof msg.y === "number") {
-        setRemoteCursors((prev) => ({
-          ...prev,
-          [msg.clientId as string]: { x: msg.x as number, y: msg.y as number },
-        }));
+        const points = msg.points;
+        setRemoteDrafts((prev) => ({ ...prev, [authorId]: points }));
+      } else if (msg.type === "cursor") {
+        // Matched by type rather than by having x/y: viewport datagrams carry
+        // those too, and one arriving mid-stroke mustn't wipe the draft.
         // client này không còn vẽ dở (đã thả tay, kể cả khi nét quá ngắn để tạo
         // phần tử — trường hợp đó không có Op nào được gửi để dọn qua onOp bên dưới)
         setRemoteDrafts((prev) => {
-          if (!((msg.clientId as string) in prev)) return prev;
+          if (!(authorId in prev)) return prev;
           const next = { ...prev };
-          delete next[msg.clientId as string];
+          delete next[authorId];
           return next;
         });
       }
@@ -352,10 +351,9 @@ export function BoardCanvas({
     (id: string) => {
       if (tool !== "select") return; // the text tool is busy drawing new boxes
       setSelectedId(id);
-      syncCamera();
       setEditingId(id);
     },
-    [tool, setSelectedId, syncCamera],
+    [tool, setSelectedId],
   );
 
   const handleCommitText = useCallback(
@@ -427,16 +425,20 @@ export function BoardCanvas({
       const stage = stageRef.current;
       const pointer = stage?.getPointerPosition();
       if (!stage || !pointer) return;
+      onCameraGesture?.();
       const factor = e.evt.deltaY > 0 ? 0.9 : 1.1;
       zoomStageAtPointer(stage, pointer, factor);
-      if (editingIdRef.current) syncCamera();
     },
-    [syncCamera],
+    [onCameraGesture],
   );
 
-  const handleStageDragMove = useCallback(() => {
-    if (editingIdRef.current) syncCamera();
-  }, [syncCamera]);
+  const handleStageDragStart = useCallback(
+    (e: Konva.KonvaEventObject<DragEvent>) => {
+      // Element drags bubble up here too; only panning the stage itself moves the camera.
+      if (e.target === e.target.getStage()) onCameraGesture?.();
+    },
+    [onCameraGesture],
+  );
 
   const handleStageMouseDown = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
@@ -492,7 +494,6 @@ export function BoardCanvas({
           { position, size: boxSize, text: "", color, fontSize },
           ["position", "size", "text", "color", "fontSize"],
         );
-        syncCamera();
         setEditingId(id);
       } else if (isElementType(tool)) {
         createElement(
@@ -527,7 +528,6 @@ export function BoardCanvas({
     color,
     fontSize,
     createElement,
-    syncCamera,
   ]);
 
   const editingElement = editingId ? elements[editingId] : null;
@@ -544,7 +544,7 @@ export function BoardCanvas({
         height={size.height}
         draggable={tool === "pan"}
         onWheel={handleWheel}
-        onDragMove={handleStageDragMove}
+        onDragStart={handleStageDragStart}
         onMouseDown={handleStageMouseDown}
         onMouseMove={handleStageMouseMove}
         onMouseUp={handleStageMouseUp}
@@ -616,7 +616,7 @@ export function BoardCanvas({
             />
           )}
 
-          {/* other clients' in-progress line/freedraw strokes + cursor, via datagram */}
+          {/* other clients' in-progress line/freedraw strokes, via datagram */}
           {Object.entries(remoteDrafts).map(
             ([authorId, pts]) =>
               pts.length > 1 && (
@@ -630,17 +630,6 @@ export function BoardCanvas({
                 />
               ),
           )}
-          {Object.entries(remoteCursors).map(([id, pos]) => (
-            <Circle
-              key={id}
-              x={pos.x}
-              y={pos.y}
-              radius={8}
-              stroke="#d97706"
-              dash={[3, 3]}
-              listening={false}
-            />
-          ))}
 
           <Transformer
             ref={transformerRef}
@@ -678,8 +667,7 @@ export function BoardCanvas({
           size={editingData.size}
           color={editingData.color ?? "#1f2937"}
           fontSize={editingData.fontSize ?? 16}
-          stageScale={camera.scale}
-          stageOffset={{ x: camera.x, y: camera.y }}
+          cameraStore={cameraStore}
           onCommit={handleCommitText}
         />
       )}

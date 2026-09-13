@@ -68,7 +68,9 @@ export interface BotContext {
 }
 
 type Pointer =
-  { type: "cursor"; x: number; y: number } | { type: "draft"; points: Point[] };
+  | { type: "cursor"; x: number; y: number }
+  | { type: "draft"; points: Point[] }
+  | { type: "viewport"; x: number; y: number; scale: number };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
@@ -153,7 +155,10 @@ export class Bot {
       opened = session;
       session.listenReliable((message) => this.onReliable(message));
       session.listenDatagrams((message) => this.onDatagram(message));
-      const state = await session.getState(plan.roomId);
+      const state = await session.getState(plan.roomId, {
+        clientId: this.clientId,
+        participantId: this.spec.participantId,
+      });
       this.seedViews(state.board);
 
       this.session = session;
@@ -231,6 +236,19 @@ export class Bot {
     } else {
       if (!this.box) this.walk(STEP); // a box drag moves the cursor itself
       this.sendPointer({ type: "cursor", x: this.cursor.x, y: this.cursor.y });
+    }
+
+    // A viewport heartbeat about every 2s, as the browser sends, so a bot can
+    // be followed: its "view" is its own cell at 100%.
+    const heartbeatEvery = Math.max(1, Math.round(config.cursorHz * 2));
+    if (this.seq % heartbeatEvery === 0) {
+      const { cell } = this.spec;
+      this.sendPointer({
+        type: "viewport",
+        x: cell.x + cell.size / 2,
+        y: cell.y + cell.size / 2,
+        scale: 1,
+      });
     }
   }
 
