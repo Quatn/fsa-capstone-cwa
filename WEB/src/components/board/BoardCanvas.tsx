@@ -1,7 +1,15 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Circle, Layer, Line, Rect, Stage, Transformer } from "react-konva";
+import {
+  Circle,
+  Group,
+  Layer,
+  Line,
+  Rect,
+  Stage,
+  Transformer,
+} from "react-konva";
 import type Konva from "konva";
 import { useBoardTool, type BoardTool } from "@/context/BoardToolContext";
 import type { BoardElementsById, OpHandler } from "@/hooks/useBoardTransport";
@@ -542,21 +550,28 @@ export function BoardCanvas({
         onMouseUp={handleStageMouseUp}
       >
         <Layer>
-          {Object.values(elements)
-            .filter((el) => !el.deleted)
-            .map((el) => (
-              <ElementRenderer
-                key={el.id}
-                element={el}
-                selected={el.id === selectedId}
-                draggable={tool === "select"}
-                editing={el.id === editingId}
-                registerNode={registerNode}
-                onSelect={handleSelect}
-                onStartEdit={handleStartEdit}
-                onCommitFields={commitFields}
-              />
-            ))}
+          {/* Existing elements only take the pointer in Select mode. Each one
+              swallows its mousedown (so selecting doesn't also clear the
+              selection via the stage), which with a drawing tool meant a
+              stroke or shape could never be started on top of another one.
+              Konva's listening is inherited, so this one flag covers them all. */}
+          <Group listening={tool === "select"}>
+            {Object.values(elements)
+              .filter((el) => !el.deleted)
+              .map((el) => (
+                <ElementRenderer
+                  key={el.id}
+                  element={el}
+                  selected={el.id === selectedId}
+                  draggable={tool === "select"}
+                  editing={el.id === editingId}
+                  registerNode={registerNode}
+                  onSelect={handleSelect}
+                  onStartEdit={handleStartEdit}
+                  onCommitFields={commitFields}
+                />
+              ))}
+          </Group>
 
           {/* preview of whatever the local user is currently drawing */}
           {drawStart &&
