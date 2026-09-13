@@ -1,5 +1,6 @@
 import type { ChatCoordinate, ChatMessage, ElementType, Op } from "@/types/board";
 import { parseChatMessage, parseOp } from "@/types/board";
+import check from "check-types";
 
 export type OpHandler = (op: Op) => void;
 export type DatagramHandler = (payload: unknown) => void;
@@ -76,15 +77,25 @@ export class BoardTransport {
     private readonly datagramHandlers = new Set<DatagramHandler>();
     private readonly chatHandlers = new Set<ChatHandler>();
 
-    async connect(url: string, certHashBase64: string): Promise<void> {
-        const transport = new WebTransport(url, {
-            serverCertificateHashes: [
+    async connect(url: string, certHashBase64: string | null): Promise<void> {
+        const transport: WebTransport = (() => {
+          // if certHashBase64 is a string, use certificate pinning
+          if (check.string(certHashBase64)) {
+            return new WebTransport(url, {
+              serverCertificateHashes: [
                 {
-                    algorithm: "sha-256",
-                    value: Uint8Array.from(atob(certHashBase64), (c) => c.charCodeAt(0)),
+                  algorithm: "sha-256",
+                  value: Uint8Array.from(atob(certHashBase64), (c) => c.charCodeAt(0)),
                 },
-            ],
-        });
+              ],
+            });
+          }
+          // if certHashBase64 is null, don't use certificate pinning, which waits for the browser to trust the CA
+          else {
+            return new WebTransport(url);
+          }
+        })();
+
         this.transport = transport;
         await transport.ready;
         this.connected = true;

@@ -17,7 +17,7 @@ interface LoadingElement {
 
 interface UseBoardTransportOptions {
     url: string;
-    certHashBase64: string;
+    certHashBase64: string | null;
     /** Which room to join — see server.ts: this rides along on the GET_STATE request. */
     roomId: string;
     /** Identifies the chat author; the server resolves the name/theme from it. */
