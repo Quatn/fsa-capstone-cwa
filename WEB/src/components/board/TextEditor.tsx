@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { Point, Size } from "@/types/board";
+import { useCamera, type CameraStore } from "@/lib/board/camera";
 import {
   TEXT_FONT_FAMILY,
   TEXT_LINE_HEIGHT,
@@ -14,9 +15,8 @@ interface TextEditorProps {
   size: Size;
   color: string;
   fontSize: number;
-  /** Camera transform, so the overlay lands exactly on top of the Konva node. */
-  stageScale: number;
-  stageOffset: Point;
+  /** Followed so the overlay stays exactly on top of the Konva node as the view moves. */
+  cameraStore: CameraStore;
   onCommit: (text: string) => void;
 }
 
@@ -32,12 +32,12 @@ export function TextEditor({
   size,
   color,
   fontSize,
-  stageScale,
-  stageOffset,
+  cameraStore,
   onCommit,
 }: TextEditorProps) {
   const [value, setValue] = useState(initialText);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const camera = useCamera(cameraStore);
 
   // Guards against blur firing on top of an Escape/Ctrl+Enter commit.
   // Deliberately NOT also committing on unmount: Strict Mode mounts, tears
@@ -80,14 +80,14 @@ export function TextEditor({
       }}
       style={{
         position: "absolute",
-        left: position.x * stageScale + stageOffset.x,
-        top: position.y * stageScale + stageOffset.y,
-        width: size.width * stageScale,
-        height: size.height * stageScale,
-        fontSize: fontSize * stageScale,
+        left: position.x * camera.scale + camera.x,
+        top: position.y * camera.scale + camera.y,
+        width: size.width * camera.scale,
+        height: size.height * camera.scale,
+        fontSize: fontSize * camera.scale,
         fontFamily: TEXT_FONT_FAMILY,
         lineHeight: TEXT_LINE_HEIGHT,
-        padding: TEXT_PADDING * stageScale,
+        padding: TEXT_PADDING * camera.scale,
         color,
         margin: 0,
         border: "1px dashed #6366f1",

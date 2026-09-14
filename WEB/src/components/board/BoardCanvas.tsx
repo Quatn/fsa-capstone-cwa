@@ -1,11 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Circle, Layer, Line, Rect, Stage, Transformer } from "react-konva";
+import { Group, Layer, Line, Rect, Stage, Transformer } from "react-konva";
 import type Konva from "konva";
 import { useBoardTool, type BoardTool } from "@/context/BoardToolContext";
 import type { BoardElementsById, OpHandler } from "@/hooks/useBoardTransport";
-import { useUndoRedo } from "@/hooks/useUndoRedo";
+import { useUndoRedo, type HistoryEntry } from "@/hooks/useUndoRedo";
 import { ElementRenderer } from "./ElementRenderer";
 import { TextEditor } from "./TextEditor";
 import {
@@ -14,9 +14,12 @@ import {
   flattenPoints,
 } from "@/lib/board/geometry";
 import {
+  applyView,
   focusStageOn,
+  viewOf,
   zoomStageAtPointer,
   type BoardCamera,
+  type CameraStore,
 } from "@/lib/board/camera";
 import { minTextBoxSize, textHeightAtWidth } from "@/lib/board/text";
 import type { BoardElement, ElementType, Point, TextData } from "@/types/board";
@@ -36,12 +39,50 @@ function isElementType(tool: BoardTool): tool is ElementType {
   return tool !== "select" && tool !== "pan";
 }
 
+/** Whether a key press is going into a field being typed in. */
+function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.isContentEditable || target.matches("input, textarea, select"))
+  );
+}
+
 interface DatagramPayload {
-  type?: "draft" | "cursor";
+  type?: string;
   clientId?: string;
-  x?: number;
-  y?: number;
   points?: Point[];
+}
+
+/** One element's field changes, as committed to state, the server and the undo history. */
+interface ElementUpdate {
+  id: string;
+  type: ElementType;
+  changes: Record<string, unknown>;
+}
+
+/** A multi-selection being dragged: the element under the pointer leads, the rest follow. */
+interface GroupDrag {
+  leaderId: string;
+  leaderStart: Point;
+  /** Where each other selected node started. */
+  followers: Map<string, Point>;
+  delta: Point;
+}
+
+/** The element shifted by `delta`: what moving it as part of a group commits. */
+function movedBy(element: BoardElement, delta: Point): Record<string, unknown> {
+  const data = element.data as { position?: Point; points?: Point[] };
+  if (data.points) {
+    return {
+      points: data.points.map((p) => ({ x: p.x + delta.x, y: p.y + delta.y })),
+    };
+  }
+  if (data.position) {
+    return {
+      position: { x: data.position.x + delta.x, y: data.position.y + delta.y },
+    };
+  }
+  return {};
 }
 
 interface BoardCanvasProps {
@@ -57,8 +98,14 @@ interface BoardCanvasProps {
   onDatagram: (handler: (payload: unknown) => void) => () => void;
   onOp: (handler: OpHandler) => () => void;
   clientId: string | null;
-  /** Populated with a camera handle while mounted, for the chat panel's use. */
+  /** Populated with a camera handle while mounted, for the chat panel and following. */
   cameraRef?: RefObject<BoardCamera | null>;
+  /** Fed with every camera change, so HTML overlays can follow the stage. */
+  cameraStore: CameraStore;
+  /** Called when the user pans or zooms by hand; following someone ends there. */
+  onCameraGesture?: () => void;
+  /** Attached to the group holding every element, which is what an export draws. */
+  boardRef?: RefObject<Konva.Group | null>;
 }
 
 export function BoardCanvas({
@@ -70,13 +117,17 @@ export function BoardCanvas({
   onOp,
   clientId,
   cameraRef,
+  cameraStore,
+  onCameraGesture,
+  boardRef,
 }: BoardCanvasProps) {
-  const { tool, color, fontSize, selectedId, setSelectedId } = useBoardTool();
+  const { tool, color, fontSize, selectedIds, setSelectedIds } = useBoardTool();
 
   const stageRef = useRef<Konva.Stage>(null);
   const transformerRef = useRef<Konva.Transformer>(null);
   const nodeRefs = useRef<Record<string, Konva.Node>>({});
   const lastDatagramAtRef = useRef(0);
+  const groupDragRef = useRef<GroupDrag | null>(null);
 
   // Kept in sync via effect below so commitFields/createElement/deleteSelected
   // can read the latest elements without needing `elements` in their own
@@ -87,23 +138,37 @@ export function BoardCanvas({
     elementsRef.current = elements;
   }, [elements]);
 
+  // Read by Konva's drag handlers, which fire outside React's render cycle.
+  const selectedIdsRef = useRef(selectedIds);
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
+
   const [size, setSize] = useState({ width: 1200, height: 800 });
   const [editingId, setEditingId] = useState<string | null>(null);
-  // The textarea overlay is positioned in screen pixels, so it needs the
-  // camera as React state. The stage's own transform changes outside React
-  // (wheel zoom, pan drag), hence the explicit sync — kept to while an editor
-  // is actually open, since otherwise nothing re-renders on camera moves.
-  const [camera, setCamera] = useState({ scale: 1, x: 0, y: 0 });
-  const editingIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    editingIdRef.current = editingId;
-  }, [editingId]);
 
-  const syncCamera = useCallback(() => {
+  // Mirrors the camera into the store. Whatever moves it (wheel zoom, a pan
+  // drag, the chat's jump-to-location animation, following someone) ends in
+  // one of these attribute setters, so one listener covers every case.
+  // Published once per frame, in step with Konva's own batched redraw.
+  useEffect(() => {
     const stage = stageRef.current;
     if (!stage) return;
-    setCamera({ scale: stage.scaleX(), x: stage.x(), y: stage.y() });
-  }, []);
+    let frame = 0;
+    const publish = () => {
+      frame = 0;
+      cameraStore.set({ scale: stage.scaleX(), x: stage.x(), y: stage.y() });
+    };
+    const schedule = () => {
+      if (!frame) frame = requestAnimationFrame(publish);
+    };
+    stage.on("xChange.camera yChange.camera scaleXChange.camera", schedule);
+    publish();
+    return () => {
+      stage.off(".camera");
+      if (frame) cancelAnimationFrame(frame);
+    };
+  }, [cameraStore]);
 
   useEffect(() => {
     if (!cameraRef) return;
@@ -111,15 +176,20 @@ export function BoardCanvas({
       getViewportCenter() {
         const stage = stageRef.current;
         if (!stage) return { x: 0, y: 0 };
-        // Screen centre back through the camera transform into world space.
-        return {
-          x: (stage.width() / 2 - stage.x()) / stage.scaleX(),
-          y: (stage.height() / 2 - stage.y()) / stage.scaleY(),
-        };
+        const { x, y } = viewOf(stage);
+        return { x, y };
       },
       focusOn(point) {
         const stage = stageRef.current;
         if (stage) void focusStageOn(stage, point);
+      },
+      getView() {
+        const stage = stageRef.current;
+        return stage ? viewOf(stage) : { x: 0, y: 0, scale: 1 };
+      },
+      setView(view) {
+        const stage = stageRef.current;
+        if (stage) applyView(stage, view);
       },
     };
     return () => {
@@ -130,7 +200,9 @@ export function BoardCanvas({
   const [drawStart, setDrawStart] = useState<Point | null>(null);
   const [drawCurrent, setDrawCurrent] = useState<Point | null>(null);
   const [strokePoints, setStrokePoints] = useState<Point[] | null>(null);
-  const [remoteCursors, setRemoteCursors] = useState<Record<string, Point>>({});
+  const [marquee, setMarquee] = useState<{ start: Point; end: Point } | null>(
+    null,
+  );
   const [remoteDrafts, setRemoteDrafts] = useState<Record<string, Point[]>>({});
 
   // The stage fills its container, not the window — the board sits under a
@@ -154,13 +226,14 @@ export function BoardCanvas({
     return () => observer.disconnect();
   }, []);
 
-  // Transformer (resize handles) follows the current selection, for the
-  // element types resizing actually makes sense for.
+  // Resize handles follow a single selection, for the element types resizing
+  // makes sense for. A multi-selection shows each element's outline instead.
   useEffect(() => {
     const tr = transformerRef.current;
     if (!tr) return;
-    const el = selectedId ? elements[selectedId] : null;
-    const node = selectedId ? nodeRefs.current[selectedId] : null;
+    const onlyId = selectedIds.length === 1 ? selectedIds[0] : null;
+    const el = onlyId ? elements[onlyId] : null;
+    const node = onlyId ? nodeRefs.current[onlyId] : null;
     // Resize handles would sit on top of the textarea while editing.
     if (
       el &&
@@ -173,39 +246,27 @@ export function BoardCanvas({
       tr.nodes([]);
     }
     tr.getLayer()?.batchDraw();
-  }, [selectedId, elements, editingId]);
+  }, [selectedIds, elements, editingId]);
 
-  // Cursor/draft datagrams from other clients — same channel the demo used,
-  // no Redis involved, drawn as a dashed preview / a small ring. Keyed by
-  // clientId so each remote client gets their own tracked cursor/draft
-  // (also what a later "name label per cursor" feature will hang off of).
+  // Other clients' in-progress line/freedraw strokes, via datagram, drawn as a
+  // dashed preview. Their cursors and name tags are RemoteCursors' job.
   useEffect(() => {
     return onDatagram((payload) => {
       const msg = payload as DatagramPayload;
       if (!msg.clientId) return; // dữ liệu cũ/hỏng, không rõ của ai — bỏ qua
+      const authorId = msg.clientId;
       if (msg.type === "draft" && msg.points) {
-        setRemoteDrafts((prev) => ({
-          ...prev,
-          [msg.clientId as string]: msg.points as Point[],
-        }));
-        // client này đang vẽ, không còn "chỉ di chuột" — bỏ vòng tròn con trỏ cũ đi
-        setRemoteCursors((prev) => {
-          if (!((msg.clientId as string) in prev)) return prev;
-          const next = { ...prev };
-          delete next[msg.clientId as string];
-          return next;
-        });
-      } else if (typeof msg.x === "number" && typeof msg.y === "number") {
-        setRemoteCursors((prev) => ({
-          ...prev,
-          [msg.clientId as string]: { x: msg.x as number, y: msg.y as number },
-        }));
+        const points = msg.points;
+        setRemoteDrafts((prev) => ({ ...prev, [authorId]: points }));
+      } else if (msg.type === "cursor") {
+        // Matched by type rather than by having x/y: viewport datagrams carry
+        // those too, and one arriving mid-stroke mustn't wipe the draft.
         // client này không còn vẽ dở (đã thả tay, kể cả khi nét quá ngắn để tạo
         // phần tử — trường hợp đó không có Op nào được gửi để dọn qua onOp bên dưới)
         setRemoteDrafts((prev) => {
-          if (!((msg.clientId as string) in prev)) return prev;
+          if (!(authorId in prev)) return prev;
           const next = { ...prev };
-          delete next[msg.clientId as string];
+          delete next[authorId];
           return next;
         });
       }
@@ -231,23 +292,26 @@ export function BoardCanvas({
     elements,
     setElements,
     sendOp,
-    onDeselect: (id) => setSelectedId((s) => (s === id ? null : s)),
+    onDeselect: (id) => setSelectedIds((ids) => ids.filter((x) => x !== id)),
   });
 
   const deleteSelected = useCallback(() => {
-    if (!selectedId) return;
-    const el = elementsRef.current[selectedId];
-    if (!el) return;
-    const id = selectedId;
-    setSelectedId(null);
-    setDeleted(id, true);
-    record({
-      kind: "toggleDeleted",
-      elementId: id,
-      type: el.type,
-      deletedAfter: true,
-    });
-  }, [selectedId, setSelectedId, setDeleted, record]);
+    const entries: HistoryEntry[] = [];
+    for (const id of selectedIds) {
+      const el = elementsRef.current[id];
+      if (!el) continue;
+      setDeleted(id, true);
+      entries.push({
+        kind: "toggleDeleted",
+        elementId: id,
+        type: el.type,
+        deletedAfter: true,
+      });
+    }
+    if (entries.length === 0) return;
+    setSelectedIds([]);
+    record(entries.length === 1 ? entries[0] : { kind: "batch", entries });
+  }, [selectedIds, setSelectedIds, setDeleted, record]);
 
   // Delete/Backspace soft-deletes the current selection; Ctrl/Cmd+Z undoes;
   // Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y redoes. All three only fire when nothing
@@ -277,6 +341,48 @@ export function BoardCanvas({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [undo, redo, deleteSelected]);
 
+  // Holding Alt borrows the pan tool, the way holding Space does in
+  // Excalidraw. The mode only flips between gestures: a drag already under
+  // way finishes as whatever it started as, whenever Alt goes down or up.
+  const [altPanning, setAltPanning] = useState(false);
+  useEffect(() => {
+    let altDown = false;
+    let buttonDown = false;
+
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "Alt") return;
+      // Otherwise tapping Alt on its own moves focus to the browser's menu.
+      if (!isTypingTarget(e.target)) e.preventDefault();
+      altDown = e.type === "keydown";
+      if (!buttonDown) setAltPanning(altDown);
+    }
+    function onPointer(e: PointerEvent) {
+      buttonDown = e.type === "pointerdown";
+      if (!buttonDown) setAltPanning(altDown);
+    }
+    // Alt+Tab to another window never delivers the keyup.
+    function onBlur() {
+      altDown = false;
+      buttonDown = false;
+      setAltPanning(false);
+    }
+
+    // Capture phase, so nothing that stops propagation can strand the mode on.
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKey, true);
+    window.addEventListener("pointerdown", onPointer, true);
+    window.addEventListener("pointerup", onPointer, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKey, true);
+      window.removeEventListener("pointerdown", onPointer, true);
+      window.removeEventListener("pointerup", onPointer, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+  const panning = tool === "pan" || altPanning;
+
   const registerNode = useCallback((id: string, node: Konva.Node | null) => {
     if (node) nodeRefs.current[id] = node;
     else delete nodeRefs.current[id];
@@ -284,36 +390,78 @@ export function BoardCanvas({
 
   const handleSelect = useCallback(
     (id: string) => {
-      if (tool === "select") setSelectedId(id);
+      if (tool !== "select") return;
+      // Pressing an element that's already selected keeps the whole
+      // selection, so a drag-selection can then be moved as a group.
+      setSelectedIds((ids) => (ids.includes(id) ? ids : [id]));
     },
-    [tool, setSelectedId],
+    [tool, setSelectedIds],
+  );
+
+  const commitMany = useCallback(
+    (updates: ElementUpdate[]) => {
+      if (updates.length === 0) return;
+      const entries = updates.map(({ id, type, changes }): HistoryEntry => {
+        const current = elementsRef.current[id];
+        const before: Record<string, unknown> = {};
+        for (const field of Object.keys(changes)) {
+          before[field] = current
+            ? (current.data as Record<string, unknown>)[field]
+            : undefined;
+        }
+        return { kind: "fields", elementId: id, type, before, after: changes };
+      });
+      setElements((prev) => {
+        const next = { ...prev };
+        for (const { id, changes } of updates) {
+          const existing = next[id];
+          if (existing) {
+            next[id] = {
+              ...existing,
+              data: { ...existing.data, ...changes },
+            } as BoardElement;
+          }
+        }
+        return next;
+      });
+      for (const { id, type, changes } of updates) {
+        for (const [field, value] of Object.entries(changes))
+          sendOp(id, field, value, type);
+      }
+      // One undo step for the whole action, however many elements it touched.
+      record(entries.length === 1 ? entries[0] : { kind: "batch", entries });
+    },
+    [setElements, sendOp, record],
   );
 
   const commitFields = useCallback(
     (id: string, type: ElementType, changes: Record<string, unknown>) => {
-      const current = elementsRef.current[id];
-      const before: Record<string, unknown> = {};
-      for (const field of Object.keys(changes)) {
-        before[field] = current
-          ? (current.data as Record<string, unknown>)[field]
-          : undefined;
+      const group = groupDragRef.current;
+      if (!group || group.leaderId !== id) {
+        commitMany([{ id, type, changes }]);
+        return;
       }
-      setElements((prev) => {
-        const existing = prev[id];
-        if (!existing) return prev;
-        return {
-          ...prev,
-          [id]: {
-            ...existing,
-            data: { ...existing.data, ...changes },
-          } as BoardElement,
-        };
-      });
-      for (const [field, value] of Object.entries(changes))
-        sendOp(id, field, value, type);
-      record({ kind: "fields", elementId: id, type, before, after: changes });
+      // The leader of a group drag was just dropped: its own move and every
+      // follower's are committed together.
+      groupDragRef.current = null;
+      const updates: ElementUpdate[] = [{ id, type, changes }];
+      for (const followerId of group.followers.keys()) {
+        const el = elementsRef.current[followerId];
+        if (!el) continue;
+        updates.push({
+          id: followerId,
+          type: el.type,
+          changes: movedBy(el, group.delta),
+        });
+        // Lines carry the offset in their points rather than on the node,
+        // exactly as a single line drag does.
+        if (el.type === "line" || el.type === "freedraw") {
+          nodeRefs.current[followerId]?.position({ x: 0, y: 0 });
+        }
+      }
+      commitMany(updates);
     },
-    [setElements, sendOp, record],
+    [commitMany],
   );
 
   const createElement = useCallback(
@@ -327,7 +475,8 @@ export function BoardCanvas({
         ...prev,
         [id]: { id, type, deleted: false, data } as BoardElement,
       }));
-      setSelectedId(id);
+      // Deliberately not selected: you carry on with the same tool, and resize
+      // handles on what you just drew would only get in the way.
       for (const field of fields) sendOp(id, field, data[field], type);
       record({
         kind: "toggleDeleted",
@@ -337,17 +486,16 @@ export function BoardCanvas({
       });
       return id;
     },
-    [setElements, setSelectedId, sendOp, record],
+    [setElements, sendOp, record],
   );
 
   const handleStartEdit = useCallback(
     (id: string) => {
       if (tool !== "select") return; // the text tool is busy drawing new boxes
-      setSelectedId(id);
-      syncCamera();
+      setSelectedIds([id]);
       setEditingId(id);
     },
-    [tool, setSelectedId, syncCamera],
+    [tool, setSelectedIds],
   );
 
   const handleCommitText = useCallback(
@@ -363,7 +511,7 @@ export function BoardCanvas({
       if (!text.trim()) {
         // Nothing to show, and an empty box has no hit area to click back
         // into — drop it, the way Paint discards a text box you leave blank.
-        setSelectedId((s) => (s === id ? null : s));
+        setSelectedIds((ids) => ids.filter((x) => x !== id));
         setDeleted(id, true);
         record({
           kind: "toggleDeleted",
@@ -389,7 +537,34 @@ export function BoardCanvas({
 
       if (Object.keys(changes).length > 0) commitFields(id, "text", changes);
     },
-    [editingId, commitFields, setDeleted, record, setSelectedId],
+    [editingId, commitFields, setDeleted, record, setSelectedIds],
+  );
+
+  // Selects every element lying wholly inside the box dragged out.
+  const selectInside = useCallback(
+    (a: Point, b: Point) => {
+      const stage = stageRef.current;
+      const { position, size: box } = boxFromDrag(a, b);
+      if (!stage || (box.width < 3 && box.height < 3)) return; // just a click
+      const right = position.x + box.width;
+      const bottom = position.y + box.height;
+      const inside: string[] = [];
+      for (const [id, node] of Object.entries(nodeRefs.current)) {
+        if (elementsRef.current[id]?.deleted !== false) continue;
+        // Relative to the stage means world coordinates, the box's own space.
+        const r = node.getClientRect({ relativeTo: stage });
+        if (
+          r.x >= position.x &&
+          r.y >= position.y &&
+          r.x + r.width <= right &&
+          r.y + r.height <= bottom
+        ) {
+          inside.push(id);
+        }
+      }
+      setSelectedIds(inside);
+    },
+    [setSelectedIds],
   );
 
   const getWorldPointer = useCallback((): Point | null => {
@@ -419,25 +594,80 @@ export function BoardCanvas({
       const stage = stageRef.current;
       const pointer = stage?.getPointerPosition();
       if (!stage || !pointer) return;
+      onCameraGesture?.();
       const factor = e.evt.deltaY > 0 ? 0.9 : 1.1;
       zoomStageAtPointer(stage, pointer, factor);
-      if (editingIdRef.current) syncCamera();
     },
-    [syncCamera],
+    [onCameraGesture],
   );
 
-  const handleStageDragMove = useCallback(() => {
-    if (editingIdRef.current) syncCamera();
-  }, [syncCamera]);
+  const handleStageDragStart = useCallback(
+    (e: Konva.KonvaEventObject<DragEvent>) => {
+      // Element drags bubble up here too; only panning the stage itself moves the camera.
+      if (e.target === e.target.getStage()) {
+        onCameraGesture?.();
+        return;
+      }
+      // Dragging one element of a multi-selection brings the rest along.
+      const selected = selectedIdsRef.current;
+      const leaderId = Object.keys(nodeRefs.current).find(
+        (id) => nodeRefs.current[id] === e.target,
+      );
+      if (!leaderId || selected.length < 2 || !selected.includes(leaderId)) {
+        return;
+      }
+      const followers = new Map<string, Point>();
+      for (const id of selected) {
+        const node = nodeRefs.current[id];
+        if (id !== leaderId && node) followers.set(id, node.position());
+      }
+      groupDragRef.current = {
+        leaderId,
+        leaderStart: e.target.position(),
+        followers,
+        delta: { x: 0, y: 0 },
+      };
+    },
+    [onCameraGesture],
+  );
+
+  const handleStageDragMove = useCallback(
+    (e: Konva.KonvaEventObject<DragEvent>) => {
+      const group = groupDragRef.current;
+      if (!group || nodeRefs.current[group.leaderId] !== e.target) return;
+      const at = e.target.position();
+      group.delta = {
+        x: at.x - group.leaderStart.x,
+        y: at.y - group.leaderStart.y,
+      };
+      for (const [id, start] of group.followers) {
+        nodeRefs.current[id]?.position({
+          x: start.x + group.delta.x,
+          y: start.y + group.delta.y,
+        });
+      }
+    },
+    [],
+  );
 
   const handleStageMouseDown = useCallback(
     (e: Konva.KonvaEventObject<MouseEvent>) => {
-      if (tool === "select" || tool === "pan") {
-        if (e.target === e.target.getStage()) setSelectedId(null); // click nền trống -> bỏ chọn
-        return;
-      }
+      // A pan borrowed with Alt leaves the selection alone, as Space does in
+      // Excalidraw; the stage's own drag does the panning.
+      if (altPanning) return;
+      const onEmptyCanvas = e.target === e.target.getStage();
+      // A press on empty canvas clears the selection whatever the tool, so
+      // clicking away is how you deselect. (In Select mode a press on an
+      // element never reaches here: the element swallows it.)
+      if (onEmptyCanvas) setSelectedIds([]); // click nền trống -> bỏ chọn
+      if (tool === "pan") return;
       const p = getWorldPointer();
       if (!p) return;
+      if (tool === "select") {
+        // Dragging from empty canvas draws a box that selects what it encloses.
+        if (onEmptyCanvas) setMarquee({ start: p, end: p });
+        return;
+      }
       if (BOX_TOOLS.includes(tool)) {
         setDrawStart(p);
         setDrawCurrent(p);
@@ -445,14 +675,16 @@ export function BoardCanvas({
         setStrokePoints([p]);
       }
     },
-    [tool, getWorldPointer, setSelectedId],
+    [tool, altPanning, getWorldPointer, setSelectedIds],
   );
 
   const handleStageMouseMove = useCallback(() => {
     const p = getWorldPointer();
     if (!p) return;
 
-    if (drawStart) {
+    if (marquee) {
+      setMarquee({ start: marquee.start, end: p });
+    } else if (drawStart) {
       setDrawCurrent(p);
     } else if (strokePoints) {
       if (tool === "line") {
@@ -466,9 +698,22 @@ export function BoardCanvas({
     }
 
     maybeBroadcastPointer(p, LINEAR_TYPES.includes(tool) ? strokePoints : null);
-  }, [drawStart, strokePoints, tool, getWorldPointer, maybeBroadcastPointer]);
+  }, [
+    marquee,
+    drawStart,
+    strokePoints,
+    tool,
+    getWorldPointer,
+    maybeBroadcastPointer,
+  ]);
 
   const handleStageMouseUp = useCallback(() => {
+    if (marquee) {
+      setMarquee(null);
+      selectInside(marquee.start, marquee.end);
+      return;
+    }
+
     if (drawStart && drawCurrent) {
       const { position, size: boxSize } = boxFromDrag(drawStart, drawCurrent);
       setDrawStart(null);
@@ -484,7 +729,6 @@ export function BoardCanvas({
           { position, size: boxSize, text: "", color, fontSize },
           ["position", "size", "text", "color", "fontSize"],
         );
-        syncCamera();
         setEditingId(id);
       } else if (isElementType(tool)) {
         createElement(
@@ -512,6 +756,8 @@ export function BoardCanvas({
     }
     setStrokePoints(null);
   }, [
+    marquee,
+    selectInside,
     drawStart,
     drawCurrent,
     strokePoints,
@@ -519,7 +765,6 @@ export function BoardCanvas({
     color,
     fontSize,
     createElement,
-    syncCamera,
   ]);
 
   const editingElement = editingId ? elements[editingId] : null;
@@ -527,6 +772,7 @@ export function BoardCanvas({
     editingElement?.type === "text"
       ? (editingElement.data as Partial<TextData>)
       : null;
+  const selectedSet = new Set(selectedIds);
 
   return (
     <>
@@ -534,29 +780,39 @@ export function BoardCanvas({
         ref={stageRef}
         width={size.width}
         height={size.height}
-        draggable={tool === "pan"}
+        draggable={panning}
+        className={panning ? "cursor-grab active:cursor-grabbing" : undefined}
         onWheel={handleWheel}
+        onDragStart={handleStageDragStart}
         onDragMove={handleStageDragMove}
         onMouseDown={handleStageMouseDown}
         onMouseMove={handleStageMouseMove}
         onMouseUp={handleStageMouseUp}
       >
         <Layer>
-          {Object.values(elements)
-            .filter((el) => !el.deleted)
-            .map((el) => (
-              <ElementRenderer
-                key={el.id}
-                element={el}
-                selected={el.id === selectedId}
-                draggable={tool === "select"}
-                editing={el.id === editingId}
-                registerNode={registerNode}
-                onSelect={handleSelect}
-                onStartEdit={handleStartEdit}
-                onCommitFields={commitFields}
-              />
-            ))}
+          {/* Existing elements only take the pointer in Select mode, and not
+              while Alt is held for panning. Each one swallows its mousedown
+              (so selecting doesn't also clear the selection via the stage),
+              which with a drawing tool meant a stroke or shape could never be
+              started on top of another one, nor a pan. Konva's listening is
+              inherited, so this one flag covers them all. */}
+          <Group ref={boardRef} listening={tool === "select" && !altPanning}>
+            {Object.values(elements)
+              .filter((el) => !el.deleted)
+              .map((el) => (
+                <ElementRenderer
+                  key={el.id}
+                  element={el}
+                  selected={selectedSet.has(el.id)}
+                  draggable={tool === "select"}
+                  editing={el.id === editingId}
+                  registerNode={registerNode}
+                  onSelect={handleSelect}
+                  onStartEdit={handleStartEdit}
+                  onCommitFields={commitFields}
+                />
+              ))}
+          </Group>
 
           {/* preview of whatever the local user is currently drawing */}
           {drawStart &&
@@ -601,7 +857,7 @@ export function BoardCanvas({
             />
           )}
 
-          {/* other clients' in-progress line/freedraw strokes + cursor, via datagram */}
+          {/* other clients' in-progress line/freedraw strokes, via datagram */}
           {Object.entries(remoteDrafts).map(
             ([authorId, pts]) =>
               pts.length > 1 && (
@@ -615,30 +871,44 @@ export function BoardCanvas({
                 />
               ),
           )}
-          {Object.entries(remoteCursors).map(([id, pos]) => (
-            <Circle
-              key={id}
-              x={pos.x}
-              y={pos.y}
-              radius={8}
-              stroke="#d97706"
-              dash={[3, 3]}
-              listening={false}
-            />
-          ))}
+
+          {/* the drag-select box */}
+          {marquee &&
+            (() => {
+              const { position, size: box } = boxFromDrag(
+                marquee.start,
+                marquee.end,
+              );
+              return (
+                <Rect
+                  x={position.x}
+                  y={position.y}
+                  width={box.width}
+                  height={box.height}
+                  fill="rgba(99, 102, 241, 0.08)"
+                  stroke="#6366f1"
+                  strokeWidth={1}
+                  strokeScaleEnabled={false}
+                  dash={[4, 4]}
+                  listening={false}
+                />
+              );
+            })()}
 
           <Transformer
             ref={transformerRef}
+            // While panning, a press on a resize handle pans too.
+            listening={!panning}
             rotateEnabled={false}
             boundBoxFunc={(oldBox, newBox) => {
               // Stop a text box being dragged smaller than the text it holds.
               // Rejecting the whole frame (returning oldBox) rather than just
               // clamping the width keeps the box's position pinned too —
               // clamping alone lets the dragged edge run away from the box.
-              const el = selectedId ? elementsRef.current[selectedId] : null;
-              if (!selectedId || el?.type !== "text") return newBox;
-              const node = nodeRefs.current[selectedId] as
-                Konva.Text | undefined;
+              const onlyId = selectedIds.length === 1 ? selectedIds[0] : null;
+              const el = onlyId ? elementsRef.current[onlyId] : null;
+              if (!onlyId || el?.type !== "text") return newBox;
+              const node = nodeRefs.current[onlyId] as Konva.Text | undefined;
               if (!node) return newBox;
 
               // boundBox is in screen pixels, element geometry in world units.
@@ -663,8 +933,7 @@ export function BoardCanvas({
           size={editingData.size}
           color={editingData.color ?? "#1f2937"}
           fontSize={editingData.fontSize ?? 16}
-          stageScale={camera.scale}
-          stageOffset={{ x: camera.x, y: camera.y }}
+          cameraStore={cameraStore}
           onCommit={handleCommitText}
         />
       )}

@@ -1,10 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
-import type { BoardElement, ChatCoordinate, ChatMessage, ElementType, Op } from "@/types/board";
+import type { BoardElement, ChatCoordinate, ChatMessage, ElementType, Op, Presence } from "@/types/board";
 import { BoardTransport, type DatagramHandler } from "@/lib/board/webtransportClient";
 
 export type BoardElementsById = Record<string, BoardElement>;
+/** Everyone in the room right now, keyed by the clientId their datagrams carry. */
+export type PresenceByClientId = Record<string, Presence>;
 export type ConnectionState = "connecting" | "connected" | "error";
 export type OpHandler = (op: Op) => void;
 
@@ -17,10 +19,10 @@ interface LoadingElement {
 
 interface UseBoardTransportOptions {
     url: string;
-    certHashBase64: string;
+    certHashBase64: string | null;
     /** Which room to join — see server.ts: this rides along on the GET_STATE request. */
     roomId: string;
-    /** Identifies the chat author; the server resolves the name/theme from it. */
+    /** Identifies us to the server, which resolves our name/theme from it for chat and presence. */
     participantId: string | null;
 }
 
@@ -36,6 +38,8 @@ interface UseBoardTransportResult {
     /** The room's conversation, oldest first — history on join plus live pushes. */
     chatMessages: ChatMessage[];
     sendChat: (content: string, coordinate: ChatCoordinate | null) => void;
+    /** Who's in the room, ourselves included. */
+    participants: PresenceByClientId;
     connectionState: ConnectionState;
     clientId: string | null;
 }
@@ -50,6 +54,7 @@ export function useBoardTransport({ url, certHashBase64, roomId, participantId }
     const transportRef = useRef<BoardTransport | null>(null);
     const [elements, setElements] = useState<BoardElementsById>({});
     const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+    const [participants, setParticipants] = useState<PresenceByClientId>({});
     const [connectionState, setConnectionState] = useState<ConnectionState>("connecting");
     const [clientId, setClientId] = useState<string | null>(null);
 
@@ -97,6 +102,7 @@ export function useBoardTransport({ url, certHashBase64, roomId, participantId }
         // của phòng cũ còn hiện trên màn hình trong lúc phòng mới đang tải.
         setElements({});
         setChatMessages([]);
+        setParticipants({});
         setConnectionState("connecting");
 
         const transport = new BoardTransport();
@@ -120,6 +126,18 @@ export function useBoardTransport({ url, certHashBase64, roomId, participantId }
                 prev.some((m) => m.id === message.id) ? prev : [...prev, message],
             );
         });
+        const unsubscribePresence = transport.onPresence((message) => {
+            if (cancelled) return;
+            setParticipants((prev) => {
+                if (message.event === "join") {
+                    return { ...prev, [message.participant.clientId]: message.participant };
+                }
+                if (!(message.clientId in prev)) return prev;
+                const next = { ...prev };
+                delete next[message.clientId];
+                return next;
+            });
+        });
 
         (async () => {
             try {
@@ -127,7 +145,7 @@ export function useBoardTransport({ url, certHashBase64, roomId, participantId }
                 // Unmounted mid-handshake: the session is already being torn
                 // down, so asking it for state would only throw.
                 if (cancelled) return;
-                const state = await transport.loadState(roomId);
+                const state = await transport.loadState(roomId, participantIdRef.current);
                 if (cancelled) return;
 
                 const loading: Record<string, LoadingElement> = {};
@@ -149,6 +167,10 @@ export function useBoardTransport({ url, certHashBase64, roomId, participantId }
                 }
                 setElements(loaded);
                 setChatMessages(state.chat);
+                // Merged under anything already pushed: someone else's join can
+                // arrive while this reply is still in flight.
+                const present = Object.fromEntries(state.participants.map((p) => [p.clientId, p]));
+                setParticipants((prev) => ({ ...present, ...prev }));
                 setConnectionState("connected");
             } catch (err) {
                 console.error("useBoardTransport: connect/loadState failed", err);
@@ -161,6 +183,7 @@ export function useBoardTransport({ url, certHashBase64, roomId, participantId }
             unsubscribeOp();
             unsubscribeDatagram();
             unsubscribeChat();
+            unsubscribePresence();
             transport.close();
             transportRef.current = null;
         };
@@ -202,6 +225,7 @@ export function useBoardTransport({ url, certHashBase64, roomId, participantId }
         onOp,
         chatMessages,
         sendChat,
+        participants,
         connectionState,
         clientId,
     };

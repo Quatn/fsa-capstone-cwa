@@ -42,26 +42,32 @@ export default function CreateRoomCard() {
   };
 
   return (
-    <section className="rounded-lg border border-gray-200 bg-gray-50 p-6 shadow-sm">
-      <h2 className="mb-3 text-lg font-semibold text-gray-900">
-        Create a room
-      </h2>
-
+    <section className="flex flex-col items-center gap-3">
       <button
         type="button"
         disabled={isAuthenticating || !isAuthenticated || isLoading}
         onClick={() => void handleCreateRoom()}
-        className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-blue-300"
+        className="group inline-flex items-center gap-2 rounded-full bg-indigo-600 px-8 py-4 text-base font-semibold text-white shadow-lg shadow-indigo-500/30 transition hover:-translate-y-0.5 hover:bg-indigo-500 hover:shadow-xl hover:shadow-indigo-500/40 disabled:cursor-not-allowed disabled:translate-y-0 disabled:bg-indigo-300 disabled:shadow-none"
       >
         {isAuthenticating
           ? "Preparing session..."
           : isLoading
             ? "Creating room..."
-            : "Create room"}
+            : "Create a room"}
+        <span
+          aria-hidden
+          className="transition-transform group-hover:translate-x-0.5"
+        >
+          →
+        </span>
       </button>
 
+      <p className="text-sm text-slate-500">
+        No sign-up needed: you&apos;ll join with a guest name.
+      </p>
+
       {errorMessage && (
-        <p className="mt-3 text-sm text-red-600" role="alert">
+        <p className="text-sm text-red-600" role="alert">
           {errorMessage}
         </p>
       )}
