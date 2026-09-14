@@ -8,7 +8,7 @@ import type { BoardElementsById } from "./useBoardTransport";
 type FieldValues = Record<string, unknown>;
 
 /**
- * One undo-able action. Deliberately just two kinds:
+ * One undo-able action. Deliberately just a few kinds:
  *  - "toggleDeleted" covers both create (deletedAfter: false — undo hides
  *    it) and explicit delete (deletedAfter: true — undo restores it). The
  *    element's fields are never actually removed by an undo, only the
@@ -18,10 +18,13 @@ type FieldValues = Record<string, unknown>;
  *    anything that's a plain field value change, batched per user action
  *    (e.g. a resize commits `position` + `size` together as ONE entry, not
  *    two, so one Ctrl+Z undoes the whole resize).
+ *  - "batch" groups the entries of one action that touched several elements
+ *    (moving or deleting a drag-selection), so one Ctrl+Z undoes them all.
  */
 export type HistoryEntry =
     | { kind: "toggleDeleted"; elementId: string; type: ElementType; deletedAfter: boolean }
-    | { kind: "fields"; elementId: string; type: ElementType; before: FieldValues; after: FieldValues };
+    | { kind: "fields"; elementId: string; type: ElementType; before: FieldValues; after: FieldValues }
+    | { kind: "batch"; entries: HistoryEntry[] };
 
 const MAX_HISTORY = 100;
 
@@ -100,27 +103,39 @@ export function useUndoRedo({ elements, setElements, sendOp, onDeselect }: UseUn
         [setElements, sendOp],
     );
 
+    /** Plays an entry back either way; a batch replays its parts, last-first when undoing. */
+    const apply = useCallback(
+        (entry: HistoryEntry, direction: "undo" | "redo") => {
+            const run = (e: HistoryEntry): void => {
+                if (e.kind === "batch") {
+                    const parts = direction === "undo" ? [...e.entries].reverse() : e.entries;
+                    parts.forEach(run);
+                } else if (e.kind === "toggleDeleted") {
+                    setDeleted(e.elementId, direction === "undo" ? !e.deletedAfter : e.deletedAfter);
+                } else if (direction === "undo") {
+                    applyFieldsIfUnchanged(e.elementId, e.type, e.before, e.after);
+                } else {
+                    applyFieldsIfUnchanged(e.elementId, e.type, e.after, e.before);
+                }
+            };
+            run(entry);
+        },
+        [applyFieldsIfUnchanged, setDeleted],
+    );
+
     const undo = useCallback(() => {
         const entry = undoStack.current.pop();
         if (!entry) return;
         redoStack.current.push(entry);
-        if (entry.kind === "toggleDeleted") {
-            setDeleted(entry.elementId, !entry.deletedAfter);
-        } else {
-            applyFieldsIfUnchanged(entry.elementId, entry.type, entry.before, entry.after);
-        }
-    }, [applyFieldsIfUnchanged, setDeleted]);
+        apply(entry, "undo");
+    }, [apply]);
 
     const redo = useCallback(() => {
         const entry = redoStack.current.pop();
         if (!entry) return;
         undoStack.current.push(entry);
-        if (entry.kind === "toggleDeleted") {
-            setDeleted(entry.elementId, entry.deletedAfter);
-        } else {
-            applyFieldsIfUnchanged(entry.elementId, entry.type, entry.after, entry.before);
-        }
-    }, [applyFieldsIfUnchanged, setDeleted]);
+        apply(entry, "redo");
+    }, [apply]);
 
     return { record, undo, redo, setDeleted };
 }

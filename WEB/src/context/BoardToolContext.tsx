@@ -19,8 +19,9 @@ interface BoardToolContextValue {
   setColor: (color: string) => void;
   fontSize: number;
   setFontSize: (fontSize: number) => void;
-  selectedId: string | null;
-  setSelectedId: Dispatch<SetStateAction<string | null>>;
+  /** Everything currently selected: one element from a click, several from a drag-select. */
+  selectedIds: string[];
+  setSelectedIds: Dispatch<SetStateAction<string[]>>;
 }
 
 const BoardToolContext = createContext<BoardToolContextValue | null>(null);
@@ -29,7 +30,7 @@ export function BoardToolProvider({ children }: { children: ReactNode }) {
   const [tool, setTool] = useState<BoardTool>("select");
   const [color, setColor] = useState("#1f2937");
   const [fontSize, setFontSize] = useState(18);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   return (
     <BoardToolContext.Provider
@@ -40,8 +41,8 @@ export function BoardToolProvider({ children }: { children: ReactNode }) {
         setColor,
         fontSize,
         setFontSize,
-        selectedId,
-        setSelectedId,
+        selectedIds,
+        setSelectedIds,
       }}
     >
       {children}

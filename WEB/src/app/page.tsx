@@ -1,10 +1,7 @@
-import NavigateToRoomCard from "@/components/room/NavigateToRoomCard";
+import { redirect } from "next/navigation";
 
+// The landing page lives at /room. Redirecting on the server sends visitors
+// there before anything renders, so there's no flash of an empty page.
 export default function Home() {
-  return (
-    <div className="container mx-auto py-5">
-      <h1 className="text-3xl font-bold">Welcome to CWA!</h1>
-      <NavigateToRoomCard />
-    </div>
-  );
+  redirect("/room");
 }

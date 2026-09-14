@@ -9,6 +9,7 @@ import type {
   ShapeData,
   TextData,
 } from "@/types/board";
+import { NOT_EXPORTED } from "@/lib/board/exportImage";
 import { diamondPoints, flattenPoints } from "@/lib/board/geometry";
 import {
   TEXT_FONT_FAMILY,
@@ -122,6 +123,7 @@ export function ElementRenderer({
         )}
         {selected && (
           <Rect
+            name={NOT_EXPORTED}
             x={x - 3}
             y={y - 3}
             width={width + 6}
@@ -184,6 +186,7 @@ export function ElementRenderer({
         />
         {selected && (
           <Ellipse
+            name={NOT_EXPORTED}
             x={cx}
             y={cy}
             radiusX={width / 2 + 3}
@@ -229,6 +232,7 @@ export function ElementRenderer({
         />
         {selected && (
           <Line
+            name={NOT_EXPORTED}
             points={flat}
             stroke={SELECTION_COLOR}
             strokeWidth={9}
@@ -306,6 +310,7 @@ export function ElementRenderer({
       />
       {selected && !editing && (
         <Rect
+          name={NOT_EXPORTED}
           x={x - 2}
           y={y - 2}
           width={width + 4}

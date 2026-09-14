@@ -526,7 +526,13 @@ export class Bot {
   private onDatagram(message: unknown): void {
     if (!isRecord(message)) return;
     const { clientId, sentAt, seq } = message;
-    if (typeof clientId !== "string" || !clientId.startsWith(BOT_ID_PREFIX)) {
+    // Our own are skipped too: the server sends every client the same
+    // batches, senders included.
+    if (
+      typeof clientId !== "string" ||
+      !clientId.startsWith(BOT_ID_PREFIX) ||
+      clientId === this.clientId
+    ) {
       return;
     }
     const { counters } = this.context;

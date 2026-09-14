@@ -1,15 +1,24 @@
 "use client";
 
 import { useCallback, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import type Konva from "konva";
+import { toast } from "react-toastify";
+import { HEADER_SLOT_ID } from "@/components/layout/header/headerSlot";
 import { BoardToolProvider } from "@/context/BoardToolContext";
 import { useBoardTransport } from "@/hooks/useBoardTransport";
 import { useFollow } from "@/hooks/useFollow";
 import { useAppSelector } from "@/services/client/hooks";
 import { CameraStore, type BoardCamera } from "@/lib/board/camera";
+import {
+  downloadPng,
+  exportFileName,
+  renderBoardImage,
+} from "@/lib/board/exportImage";
 import { themeSwatch } from "@/lib/board/theme";
 import type { Point } from "@/types/board";
 import { BoardCanvas } from "./BoardCanvas";
-import { BoardToolbar } from "./BoardToolbar";
+import { BoardToolbar, ConnectionStatus, ExportButton } from "./BoardToolbar";
 import { ChatPanel } from "./ChatPanel";
 import { FollowMenu } from "./FollowMenu";
 import { RemoteCursors } from "./RemoteCursors";
@@ -32,10 +41,21 @@ function BoardWorkspaceInner({
   // BoardCanvas owns the Konva stage; the chat panel and following read and
   // move the view through this handle rather than reaching for the stage.
   const cameraRef = useRef<BoardCamera | null>(null);
+  // The group BoardCanvas draws every element into, for exporting the drawing.
+  const boardRef = useRef<Konva.Group>(null);
   // Fed by BoardCanvas, read by the overlays (cursors, text editor), so a
   // camera move re-renders only those rather than the whole canvas.
   const [cameraStore] = useState(() => new CameraStore());
   const [chatOpen, setChatOpen] = useState(false);
+
+  // The toolbar and people menu live in the page header rather than floating
+  // over the canvas, portalled into the slot the header leaves for them.
+  // Outside that layout there's no slot, and they float over the board instead.
+  const [headerSlot] = useState(() =>
+    typeof document === "undefined"
+      ? null
+      : document.getElementById(HEADER_SLOT_ID),
+  );
 
   const {
     elements,
@@ -79,8 +99,37 @@ function BoardWorkspaceInner({
     [unfollow],
   );
 
+  const hasDrawing = Object.values(elements).some((el) => !el.deleted);
+  const exportImage = useCallback(async () => {
+    const board = boardRef.current;
+    const image = board ? renderBoardImage(board) : null;
+    if (!image || !(await downloadPng(image, exportFileName()))) {
+      toast.error("Couldn't export the board as an image.");
+    }
+  }, []);
+
   const followed = followingId ? participants[followingId] : undefined;
   const followedSwatch = followed ? themeSwatch(followed.themeColor) : null;
+
+  const headerControls = (
+    <div className="flex w-full flex-wrap items-center gap-x-3 gap-y-2">
+      <BoardToolbar />
+      <div className="ml-auto flex items-center gap-3">
+        <ConnectionStatus state={connectionState} />
+        <ExportButton
+          disabled={!hasDrawing}
+          onExport={() => void exportImage()}
+        />
+        <FollowMenu
+          participants={participants}
+          selfClientId={clientId}
+          followingId={followingId}
+          onFollow={follow}
+          onUnfollow={unfollow}
+        />
+      </div>
+    </div>
+  );
 
   return (
     // overflow-clip rather than overflow-hidden: both clip the collapsed chat
@@ -98,30 +147,29 @@ function BoardWorkspaceInner({
         cameraRef={cameraRef}
         cameraStore={cameraStore}
         onCameraGesture={unfollow}
+        boardRef={boardRef}
       />
       <RemoteCursors
         onDatagram={onDatagram}
         participants={participants}
         cameraStore={cameraStore}
       />
-      <div className="pointer-events-none absolute left-4 top-4 z-10">
-        <BoardToolbar connectionState={connectionState} />
-      </div>
-
-      {/* Stays clear of the chat panel when it's open, like the chat button. */}
+      {/* Divides the canvas from the header above: a firm line with a soft
+          shadow falling onto the board. */}
       <div
-        className={`absolute top-4 z-30 transition-all duration-200 ${
-          chatOpen ? "right-[21rem]" : "right-4"
-        }`}
-      >
-        <FollowMenu
-          participants={participants}
-          selfClientId={clientId}
-          followingId={followingId}
-          onFollow={follow}
-          onUnfollow={unfollow}
-        />
-      </div>
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 z-20 h-3 border-t border-slate-400"
+        style={{
+          background:
+            "linear-gradient(to bottom, rgb(15 23 42 / 0.18), transparent)",
+        }}
+      />
+
+      {headerSlot ? (
+        createPortal(headerControls, headerSlot)
+      ) : (
+        <div className="absolute inset-x-4 top-4 z-30">{headerControls}</div>
+      )}
 
       {followed && followedSwatch && (
         <>

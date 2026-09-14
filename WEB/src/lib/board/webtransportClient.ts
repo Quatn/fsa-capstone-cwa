@@ -283,8 +283,15 @@ export class BoardTransport {
                 const { done, value } = await reader.read();
                 if (done) break;
                 try {
-                    const payload = JSON.parse(new TextDecoder().decode(value));
-                    this.datagramHandlers.forEach((h) => h(payload));
+                    const payload: unknown = JSON.parse(new TextDecoder().decode(value));
+                    // The server groups each tick's updates into one array and sends the
+                    // same packets to everyone, us included, so our own entries are
+                    // skipped here and nothing downstream ever sees its own cursor.
+                    const messages = Array.isArray(payload) ? payload : [payload];
+                    for (const message of messages) {
+                        if ((message as { clientId?: unknown } | null)?.clientId === this.clientId) continue;
+                        this.datagramHandlers.forEach((h) => h(message));
+                    }
                 } catch {
                     // rác/mất gói — bỏ qua, datagram vốn không đảm bảo tin cậy
                 }

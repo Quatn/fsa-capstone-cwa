@@ -127,7 +127,11 @@ export class Session {
       while (true) {
         const { done, value } = await reader.read();
         if (done) return;
-        handler(parse(value));
+        // The server groups each tick's updates into one JSON array.
+        const payload = parse(value);
+        for (const message of Array.isArray(payload) ? payload : [payload]) {
+          handler(message);
+        }
       }
     })().catch(() => {});
   }

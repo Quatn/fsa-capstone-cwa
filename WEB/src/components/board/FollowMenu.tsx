@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
+import { useDismiss } from "@/hooks/useDismiss";
 import { initialOf, themeSwatch } from "@/lib/board/theme";
 import type { Presence } from "@/types/board";
 
@@ -35,23 +36,7 @@ export function FollowMenu({
 }: FollowMenuProps) {
   const [open, setOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
-
-  // Closes on a click anywhere else, or on Escape.
-  useEffect(() => {
-    if (!open) return;
-    function onPointerDown(event: PointerEvent) {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    document.addEventListener("pointerdown", onPointerDown);
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("pointerdown", onPointerDown);
-      document.removeEventListener("keydown", onKeyDown);
-    };
-  }, [open]);
+  useDismiss(rootRef, open, setOpen);
 
   const self = selfClientId ? participants[selfClientId] : undefined;
   if (!self) return null; // not in the room's presence yet
@@ -68,7 +53,7 @@ export function FollowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         title="People in this room"
-        className="flex items-center gap-1.5 rounded-full border border-slate-700/60 bg-slate-900/90 py-1 pl-1 pr-2 text-slate-300 shadow-lg backdrop-blur hover:bg-slate-800"
+        className="flex items-center gap-1.5 rounded-full border border-slate-200 bg-white py-1 pl-1 pr-2 text-slate-600 shadow-sm hover:bg-slate-50"
       >
         <Avatar person={self} />
         {others.length > 0 && (
@@ -89,9 +74,9 @@ export function FollowMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 top-full mt-2 w-64 rounded-xl border border-slate-700/60 bg-slate-900/95 p-2 text-slate-100 shadow-xl backdrop-blur"
+          className="absolute right-0 top-full z-50 mt-2 w-64 rounded-xl border border-slate-200 bg-white p-2 text-slate-800 shadow-xl"
         >
-          <p className="px-2 pb-2 pt-1 text-center text-xs text-slate-400">
+          <p className="px-2 pb-2 pt-1 text-center text-xs text-slate-500">
             Click on user to follow
           </p>
           <ul className="max-h-80 overflow-y-auto">
@@ -100,7 +85,7 @@ export function FollowMenu({
               <span className="flex-1 truncate text-sm">
                 {self.displayName}
               </span>
-              <span className="text-xs text-slate-400">(You)</span>
+              <span className="text-xs text-slate-500">(You)</span>
             </li>
             {others.map((person) => {
               const following = person.clientId === followingId;
@@ -114,8 +99,8 @@ export function FollowMenu({
                       else onFollow(person.clientId);
                       setOpen(false);
                     }}
-                    className={`flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-slate-800 ${
-                      following ? "bg-slate-800" : ""
+                    className={`flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-slate-100 ${
+                      following ? "bg-indigo-50" : ""
                     }`}
                   >
                     <Avatar person={person} />
@@ -123,7 +108,7 @@ export function FollowMenu({
                       {person.displayName}
                     </span>
                     {following && (
-                      <span className="text-xs text-indigo-300">Following</span>
+                      <span className="text-xs text-indigo-600">Following</span>
                     )}
                   </button>
                 </li>
@@ -131,7 +116,7 @@ export function FollowMenu({
             })}
           </ul>
           {others.length === 0 && (
-            <p className="px-2 py-2 text-center text-xs text-slate-500">
+            <p className="px-2 py-2 text-center text-xs text-slate-400">
               Nobody else is here yet.
             </p>
           )}

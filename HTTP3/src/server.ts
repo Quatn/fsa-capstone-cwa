@@ -236,17 +236,23 @@ async function handleChatMessage(raw: unknown, roomId: string): Promise<void> {
 async function broadcastStreamOp(payload: Uint8Array, exclude: any, roomId: string): Promise<void> {
   const room = rooms.get(roomId);
   if (!room) return;
-  for (const s of room.sessions) {
-    if (s === exclude) continue;
-    try {
-      const stream = await s.createUnidirectionalStream();
-      const writer = stream.getWriter();
-      await writer.write(payload);
-      await writer.close();
-    } catch {
-      // session có thể vừa đóng — bỏ qua, sẽ tự bị dọn khỏi registry qua session.closed
-    }
-  }
+  // To every recipient at once. One after another, each op waited on every
+  // earlier recipient's stream to open and finish: in a room of 100, a stroke
+  // queued behind 99 of them.
+  await Promise.all(
+    [...room.sessions]
+      .filter((s) => s !== exclude)
+      .map(async (s) => {
+        try {
+          const stream = await s.createUnidirectionalStream();
+          const writer = stream.getWriter();
+          await writer.write(payload);
+          await writer.close();
+        } catch {
+          // session có thể vừa đóng — bỏ qua, sẽ tự bị dọn khỏi registry qua session.closed
+        }
+      }),
+  );
 }
 
 async function handleWriteStream(stream: ReadableStream<Uint8Array>, session: any): Promise<void> {
@@ -431,21 +437,111 @@ async function handleReadStream(stream: any, session: any): Promise<void> {
   await writer.close();
 }
 
+// ---------------------------------------------------------------------------
+// Datagrams (cursors, drafts, viewports). Relaying each one to every other
+// session the moment it arrived made sends grow with the square of the room:
+// ~70,000 a second at 85 people, against a measured ceiling of ~10,000. So a
+// tick's worth is collected per room and sent packed into as few datagrams
+// as fit, the same packets to everyone. Nothing is dropped or merged: every
+// update still arrives, just grouped.
+// ---------------------------------------------------------------------------
+
+const DATAGRAM_TICK_MS = Number(process.env.DATAGRAM_TICK_MS ?? 100);
+/** Under the ~1,200-byte datagram limit, with room to spare. */
+const DATAGRAM_BATCH_BYTES = Number(process.env.DATAGRAM_BATCH_BYTES ?? 1100);
+
+/** Per room, the datagrams received since the last tick, as JSON text. */
+const pendingDatagrams = new Map<string, string[]>();
+/** One writer per session for its whole life, instead of one taken and released per send. */
+const datagramWriters = new WeakMap<any, WritableStreamDefaultWriter<Uint8Array>>();
+
+function datagramWriterFor(session: any): WritableStreamDefaultWriter<Uint8Array> {
+  let writer = datagramWriters.get(session);
+  if (!writer) {
+    writer = session.datagrams.writable.getWriter() as WritableStreamDefaultWriter<Uint8Array>;
+    datagramWriters.set(session, writer);
+  }
+  return writer;
+}
+
+/**
+ * Groups messages into JSON arrays of at most DATAGRAM_BATCH_BYTES each. A
+ * message too big to share a packet goes out alone, exactly as it arrived;
+ * clients accept both shapes.
+ */
+function packDatagrams(messages: string[]): Uint8Array[] {
+  const encoder = new TextEncoder();
+  const packets: Uint8Array[] = [];
+  let batch: string[] = [];
+  let batchBytes = 2; // "[" and "]"
+
+  const close = () => {
+    if (batch.length > 0) packets.push(encoder.encode(`[${batch.join(",")}]`));
+    batch = [];
+    batchBytes = 2;
+  };
+
+  for (const message of messages) {
+    const size = Buffer.byteLength(message);
+    if (size + 2 > DATAGRAM_BATCH_BYTES) {
+      packets.push(encoder.encode(message));
+      continue;
+    }
+    if (batchBytes + size + 1 > DATAGRAM_BATCH_BYTES) close();
+    batchBytes += size + (batch.length > 0 ? 1 : 0);
+    batch.push(message);
+  }
+  close();
+  return packets;
+}
+
+function flushDatagrams(): void {
+  for (const [roomId, messages] of pendingDatagrams) {
+    const room = rooms.get(roomId);
+    if (!room) continue;
+    const packets = packDatagrams(messages);
+    // Everyone gets the same packets, senders included, and each client skips
+    // its own entries: far cheaper than building a batch per recipient.
+    for (const session of room.sessions) {
+      try {
+        const writer = datagramWriterFor(session);
+        for (const packet of packets) writer.write(packet).catch(() => { });
+      } catch {
+        // session có thể vừa đóng — bỏ qua, sẽ tự bị dọn khỏi registry qua session.closed
+      }
+    }
+  }
+  pendingDatagrams.clear();
+}
+
+setInterval(flushDatagrams, DATAGRAM_TICK_MS);
+
+function isJsonObject(text: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+  } catch {
+    return false;
+  }
+}
+
 async function handleDatagrams(session: any): Promise<void> {
   const reader = session.datagrams.readable.getReader();
+  const decoder = new TextDecoder();
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
     const roomId = sessionRoomId.get(session);
     if (!roomId) continue; // chưa join phòng nào (chưa gửi GET_STATE lần đầu) — bỏ qua
-    const room = rooms.get(roomId);
-    if (!room) continue;
-    for (const s of room.sessions) {
-      if (s === session) continue;
-      const w = s.datagrams.writable.getWriter();
-      w.write(value).catch(() => { });
-      w.releaseLock();
+    const text = decoder.decode(value);
+    // One malformed message spliced into a batch would break the whole packet for everyone.
+    if (!isJsonObject(text)) continue;
+    let messages = pendingDatagrams.get(roomId);
+    if (!messages) {
+      messages = [];
+      pendingDatagrams.set(roomId, messages);
     }
+    messages.push(text);
   }
 }
 
