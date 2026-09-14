@@ -17,7 +17,7 @@ import { RemoteCursors } from "./RemoteCursors";
 export interface BoardWorkspaceProps {
   roomId: string;
   wsUrl: string;
-  certHashBase64: string;
+  certHashBase64: string | null;
 }
 
 function BoardWorkspaceInner({

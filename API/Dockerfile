@@ -70,6 +70,6 @@ ENV HOSTNAME="0.0.0.0"
 
 USER node
 
-EXPOSE 4000
+EXPOSE 8080
 
 CMD ["node", "dist/main.js"]
