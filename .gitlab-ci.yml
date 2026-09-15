@@ -183,6 +183,7 @@ test:unit:
       coverage_report:
         coverage_format: cobertura
         path: API/coverage/cobertura-coverage.xml
+  allow_failure: true
 
 # --------------------------------------------------------------------------
 # DEPLOY

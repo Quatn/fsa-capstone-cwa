@@ -15,6 +15,10 @@ describe('AppController', () => {
     appController = app.get<AppController>(AppController);
   });
 
+  it('should be defined', () => {
+    expect(appController).toBeDefined();
+  });
+
   describe('healthCheck', () => {
     it('should return "Server is healthy"', async () => {
       const response = await appController.healthCheck();
