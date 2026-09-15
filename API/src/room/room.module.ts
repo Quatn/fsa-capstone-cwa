@@ -15,6 +15,9 @@ import { RedisModule } from 'src/redis/redis.module';
 import { RoomEntity } from './entity/room.entity';
 import { BoardElementEntity } from './entity/board-element.entity';
 import { ChatMessageEntity } from './entity/chat-message.entity';
+import { BoardImageEntity } from './entity/board-image.entity';
+import { BoardImageController } from './board-image.controller';
+import { BoardImageService } from './board-image.service';
 
 @Module({
   imports: [
@@ -23,13 +26,15 @@ import { ChatMessageEntity } from './entity/chat-message.entity';
       RoomEntity,
       BoardElementEntity,
       ChatMessageEntity,
+      BoardImageEntity,
     ]),
     RedisModule,
   ],
-  controllers: [RoomController],
+  controllers: [RoomController, BoardImageController],
   providers: [
     RoomService,
     BoardSyncService,
+    BoardImageService,
     {
       provide: PARTICIPANT_READER,
       useExisting: RoomService,

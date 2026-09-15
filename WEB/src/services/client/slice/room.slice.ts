@@ -22,10 +22,26 @@ export const roomApiSlice = apiClient.injectEndpoints({
         { type: "Room", id: roomId },
       ],
     }),
+
+    uploadBoardImage: builder.mutation<
+      ApiResponse<{ id: string }>,
+      { roomId: string; file: File }
+    >({
+      query: ({ roomId, file }) => {
+        const body = new FormData();
+        body.append("file", file);
+        return {
+          url: `${ROOM_URL}/${encodeURIComponent(roomId)}/images`,
+          method: "POST",
+          body,
+        };
+      },
+    }),
   }),
 });
 
 export const {
   useCreateRoomMutation,
   useJoinRoomMutation,
+  useUploadBoardImageMutation,
 } = roomApiSlice;

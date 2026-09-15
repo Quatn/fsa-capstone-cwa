@@ -13,6 +13,7 @@ export const ELEMENT_TYPES = [
   'line',
   'freedraw',
   'text',
+  'image',
 ] as const;
 
 export type ElementType = (typeof ELEMENT_TYPES)[number];
@@ -24,6 +25,7 @@ export const FIELDS_BY_TYPE: Record<ElementType, readonly string[]> = {
   line: ['points', 'strokeColor'],
   freedraw: ['points', 'strokeColor'],
   text: ['position', 'size', 'text', 'color', 'fontSize'],
+  image: ['position', 'size', 'imageId'],
 };
 
 function isElementType(value: unknown): value is ElementType {

@@ -13,6 +13,7 @@ const TOOLS: { tool: BoardTool; label: string }[] = [
   { tool: "line", label: "Line" },
   { tool: "freedraw", label: "Draw" },
   { tool: "text", label: "Text" },
+  { tool: "image", label: "Image" },
 ];
 
 /** The sizes Word offers. */
