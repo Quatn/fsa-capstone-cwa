@@ -1,15 +1,17 @@
-import type { ChatCoordinate, ChatMessage, ElementType, Op } from "@/types/board";
-import { parseChatMessage, parseOp } from "@/types/board";
+import type { ChatCoordinate, ChatMessage, ElementType, Op, Presence, PresenceMessage } from "@/types/board";
+import { parseChatMessage, parseOp, parsePresence, parsePresenceMessage } from "@/types/board";
 import check from "check-types";
 
 export type OpHandler = (op: Op) => void;
 export type DatagramHandler = (payload: unknown) => void;
 export type ChatHandler = (message: ChatMessage) => void;
+export type PresenceHandler = (message: PresenceMessage) => void;
 
-/** GET_STATE hands back the board and the room's chat log in one round trip. */
+/** GET_STATE hands back the board, the chat log and who's in the room in one round trip. */
 export interface BoardState {
     board: Record<string, RawStateEntry>;
     chat: ChatMessage[];
+    participants: Presence[];
 }
 
 /** Shape of one Redis hash entry as returned by the server's GET_STATE reply. */
@@ -59,10 +61,11 @@ function parseStoredField(raw: string): RawStateEntry | null {
 /**
  * Thin wrapper around the browser WebTransport API, carrying exactly the
  * three channels the HTTP3 server exposes (see /HTTP3/server.ts):
- *  - unidirectional streams for reliable, CRDT-merged field ops
+ *  - unidirectional streams for reliable traffic: CRDT-merged field ops,
+ *    chat, and presence (who joined or left)
  *  - one bidirectional stream per GET_STATE request (which also declares
  *    which room this session belongs to — see loadState below)
- *  - datagrams for cursor/draft broadcasts (no Redis, no ordering guarantee)
+ *  - datagrams for cursor/draft/viewport broadcasts (no Redis, no ordering guarantee)
  *
  * Deliberately has no React/Konva knowledge — `useBoardTransport` is the
  * hook that adapts this to React state.
@@ -76,6 +79,7 @@ export class BoardTransport {
     private readonly opHandlers = new Set<OpHandler>();
     private readonly datagramHandlers = new Set<DatagramHandler>();
     private readonly chatHandlers = new Set<ChatHandler>();
+    private readonly presenceHandlers = new Set<PresenceHandler>();
 
     async connect(url: string, certHashBase64: string | null): Promise<void> {
         const transport: WebTransport = (() => {
@@ -147,6 +151,11 @@ export class BoardTransport {
         return () => this.chatHandlers.delete(handler);
     }
 
+    onPresence(handler: PresenceHandler): () => void {
+        this.presenceHandlers.add(handler);
+        return () => this.presenceHandlers.delete(handler);
+    }
+
     /**
      * Posts a chat message. Nothing is echoed locally on purpose — the server
      * stamps the id, timestamp and author, then pushes the result back to
@@ -192,18 +201,24 @@ export class BoardTransport {
      * a dynamic roomId through the WebTransport connection URL itself.
      * Safe to call again later for the same room (e.g. a manual resync) —
      * joining a room you're already in is a no-op server-side.
+     *
+     * `clientId` and `participantId` also list us in the room's presence, so
+     * everyone else sees our cursor under our name; the server looks the
+     * name up itself rather than taking one from us.
      */
-    async loadState(roomId: string): Promise<BoardState> {
+    async loadState(roomId: string, participantId: string | null): Promise<BoardState> {
         if (!this.transport) throw new Error("BoardTransport: not connected");
         const stream = await this.transport.createBidirectionalStream();
         const writer = stream.writable.getWriter();
-        await writer.write(new TextEncoder().encode(JSON.stringify({ cmd: "GET_STATE", roomId })));
+        const request = { cmd: "GET_STATE", roomId, clientId: this.clientId, participantId };
+        await writer.write(new TextEncoder().encode(JSON.stringify(request)));
         const bytes = await readAll(stream.readable as ReadableStream<Uint8Array>);
         await writer.close();
 
         const reply = JSON.parse(new TextDecoder().decode(bytes)) as {
             board?: Record<string, string>;
             chat?: unknown[];
+            participants?: unknown[];
         };
 
         const board: Record<string, RawStateEntry> = {};
@@ -218,7 +233,13 @@ export class BoardTransport {
             if (message) chat.push(message);
         }
 
-        return { board, chat };
+        const participants: Presence[] = [];
+        for (const entry of reply.participants ?? []) {
+            const presence = parsePresence(entry);
+            if (presence) participants.push(presence);
+        }
+
+        return { board, chat, participants };
     }
 
     private listenForPushedOps(): void {
@@ -236,10 +257,15 @@ export class BoardTransport {
                 } catch {
                     continue;
                 }
-                // The same push channel carries both board ops and chat.
+                // The same push channel carries board ops, chat and presence.
                 const message = parseChatMessage(raw);
                 if (message) {
                     this.chatHandlers.forEach((h) => h(message));
+                    continue;
+                }
+                const presence = parsePresenceMessage(raw);
+                if (presence) {
+                    this.presenceHandlers.forEach((h) => h(presence));
                     continue;
                 }
                 const op = parseOp(raw);
@@ -257,8 +283,15 @@ export class BoardTransport {
                 const { done, value } = await reader.read();
                 if (done) break;
                 try {
-                    const payload = JSON.parse(new TextDecoder().decode(value));
-                    this.datagramHandlers.forEach((h) => h(payload));
+                    const payload: unknown = JSON.parse(new TextDecoder().decode(value));
+                    // The server groups each tick's updates into one array and sends the
+                    // same packets to everyone, us included, so our own entries are
+                    // skipped here and nothing downstream ever sees its own cursor.
+                    const messages = Array.isArray(payload) ? payload : [payload];
+                    for (const message of messages) {
+                        if ((message as { clientId?: unknown } | null)?.clientId === this.clientId) continue;
+                        this.datagramHandlers.forEach((h) => h(message));
+                    }
                 } catch {
                     // rác/mất gói — bỏ qua, datagram vốn không đảm bảo tin cậy
                 }

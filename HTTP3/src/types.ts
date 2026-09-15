@@ -205,6 +205,52 @@ export function parseChatMessage(raw: unknown): ChatMessage | null {
 }
 
 // ---------------------------------------------------------------------------
+// Presence: who is in the room right now, one entry per connection. Kept in
+// the HTTP3 server's memory only; nothing about it is stored.
+// ---------------------------------------------------------------------------
+
+export interface Presence {
+  /** Per-connection id, which is also what cursor and viewport datagrams carry. */
+  clientId: string;
+  participantId: string | null;
+  displayName: string;
+  themeColor: string;
+}
+
+export type PresenceMessage =
+  | { kind: "presence"; event: "join"; participant: Presence }
+  | { kind: "presence"; event: "leave"; clientId: string };
+
+export function parsePresence(raw: unknown): Presence | null {
+  if (!isRecord(raw)) return null;
+  if (
+    typeof raw.clientId !== "string" ||
+    typeof raw.displayName !== "string" ||
+    typeof raw.themeColor !== "string"
+  ) {
+    return null;
+  }
+  return {
+    clientId: raw.clientId,
+    participantId: typeof raw.participantId === "string" ? raw.participantId : null,
+    displayName: raw.displayName,
+    themeColor: raw.themeColor,
+  };
+}
+
+export function parsePresenceMessage(raw: unknown): PresenceMessage | null {
+  if (!isRecord(raw) || raw.kind !== "presence") return null;
+  if (raw.event === "join") {
+    const participant = parsePresence(raw.participant);
+    return participant ? { kind: "presence", event: "join", participant } : null;
+  }
+  if (raw.event === "leave" && typeof raw.clientId === "string") {
+    return { kind: "presence", event: "leave", clientId: raw.clientId };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
 // Runtime validation — JSON.parse gives you `any`; this narrows `unknown`
 // into a real Op (or null) without ever casting through `any`.
 // ---------------------------------------------------------------------------

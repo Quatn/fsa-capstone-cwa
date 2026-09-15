@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import type Konva from "konva";
 import { clamp, lerp } from "./geometry";
 import type { Point } from "@/types/board";
@@ -5,16 +6,84 @@ import type { Point } from "@/types/board";
 export const MIN_ZOOM = 0.1;
 export const MAX_ZOOM = 4;
 
+/** Where someone is looking: the world point at the centre of their screen, and their zoom. */
+export interface View {
+    x: number;
+    y: number;
+    scale: number;
+}
+
 /**
  * Imperative handle BoardCanvas publishes so siblings can read and move the
  * view without owning the stage — the chat panel needs it to attach "look
- * here" coordinates and to jump to one someone else sent.
+ * here" coordinates and to jump to one someone else sent, and following
+ * someone reads and replaces the whole view.
  */
 export interface BoardCamera {
     /** World coordinate currently at the centre of the viewport. */
     getViewportCenter(): Point;
     /** Pans so `point` ends up centred. Zoom is left alone. */
     focusOn(point: Point): void;
+    /** The current view, for broadcasting to anyone following us. */
+    getView(): View;
+    /** Jumps straight to `view`: what following someone does on each update. */
+    setView(view: View): void;
+}
+
+/** The stage transform as plain numbers: world point p lands on screen at p * scale + (x, y). */
+export interface CameraState {
+    scale: number;
+    x: number;
+    y: number;
+}
+
+/**
+ * A tiny observable over the stage's camera. The stage moves imperatively
+ * (wheel, pan, animations, following) and re-rendering the whole canvas on
+ * every frame of that would be wasteful, so the HTML laid over the board —
+ * the text editor, remote cursors — subscribes here and re-renders alone.
+ */
+export class CameraStore {
+    private state: CameraState = { scale: 1, x: 0, y: 0 };
+    private readonly listeners = new Set<() => void>();
+
+    readonly get = (): CameraState => this.state;
+
+    readonly subscribe = (listener: () => void): (() => void) => {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+    };
+
+    set(next: CameraState): void {
+        const { scale, x, y } = this.state;
+        if (next.scale === scale && next.x === x && next.y === y) return;
+        this.state = next;
+        this.listeners.forEach((listener) => listener());
+    }
+}
+
+export function useCamera(store: CameraStore): CameraState {
+    return useSyncExternalStore(store.subscribe, store.get, store.get);
+}
+
+export function viewOf(stage: Konva.Stage): View {
+    const scale = stage.scaleX();
+    return {
+        x: (stage.width() / 2 - stage.x()) / scale,
+        y: (stage.height() / 2 - stage.y()) / scale,
+        scale,
+    };
+}
+
+/** Puts `view`'s world point at the centre of this stage, at `view`'s zoom. */
+export function applyView(stage: Konva.Stage, view: View): void {
+    const scale = clamp(view.scale, MIN_ZOOM, MAX_ZOOM);
+    stage.scale({ x: scale, y: scale });
+    stage.position({
+        x: stage.width() / 2 - view.x * scale,
+        y: stage.height() / 2 - view.y * scale,
+    });
+    stage.batchDraw();
 }
 
 /**
