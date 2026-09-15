@@ -9,6 +9,12 @@ export function boxFromDrag(a: Point, b: Point): { position: Point; size: Size }
     return { position: { x, y }, size: { width, height } };
 }
 
+/** `size` scaled down to fit inside `box`, keeping its proportions. Never scaled up. */
+export function fitWithin(size: Size, box: Size): Size {
+    const k = Math.min(1, box.width / size.width, box.height / size.height);
+    return { width: size.width * k, height: size.height * k };
+}
+
 /**
  * Flat [x, y, x, y, ...] point list for a diamond inscribed in a
  * `width` x `height` box, for use as a Konva.Line's `points` prop (Line

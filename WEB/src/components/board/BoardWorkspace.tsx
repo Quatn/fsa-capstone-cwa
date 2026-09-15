@@ -9,6 +9,7 @@ import { BoardToolProvider } from "@/context/BoardToolContext";
 import { useBoardTransport } from "@/hooks/useBoardTransport";
 import { useFollow } from "@/hooks/useFollow";
 import { useAppSelector } from "@/services/client/hooks";
+import { useUploadBoardImageMutation } from "@/services/client/slice/room.slice";
 import { CameraStore, type BoardCamera } from "@/lib/board/camera";
 import {
   downloadPng,
@@ -99,6 +100,16 @@ function BoardWorkspaceInner({
     [unfollow],
   );
 
+  const [uploadBoardImage] = useUploadBoardImageMutation();
+  const uploadImage = useCallback(
+    async (file: File) => {
+      const response = await uploadBoardImage({ roomId, file }).unwrap();
+      if (!response.success) throw new Error(response.message);
+      return response.data.id;
+    },
+    [roomId, uploadBoardImage],
+  );
+
   const hasDrawing = Object.values(elements).some((el) => !el.deleted);
   const exportImage = useCallback(async () => {
     const board = boardRef.current;
@@ -148,6 +159,7 @@ function BoardWorkspaceInner({
         cameraStore={cameraStore}
         onCameraGesture={unfollow}
         boardRef={boardRef}
+        uploadImage={uploadImage}
       />
       <RemoteCursors
         onDatagram={onDatagram}

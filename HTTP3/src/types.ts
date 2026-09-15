@@ -27,6 +27,7 @@ export const ELEMENT_TYPES = [
   "line",
   "freedraw",
   "text",
+  "image",
 ] as const;
 
 export type ElementType = (typeof ELEMENT_TYPES)[number];
@@ -57,6 +58,13 @@ export interface TextData {
   fontSize: number; // px
 }
 
+/** A picture uploaded to the API, drawn stretched to `size`. */
+export interface ImageElementData {
+  position: Point; // top-left corner
+  size: Size;
+  imageId: string; // the upload's id; the file is served at /board-images/{imageId}
+}
+
 export interface BoardElementDataMap {
   rectangle: ShapeData;
   diamond: ShapeData;
@@ -64,6 +72,7 @@ export interface BoardElementDataMap {
   line: LinearData;
   freedraw: LinearData;
   text: TextData;
+  image: ImageElementData;
 }
 
 export type BoardElementData = BoardElementDataMap[ElementType];
@@ -75,6 +84,7 @@ export const FIELDS_BY_TYPE: { [T in ElementType]: readonly (keyof BoardElementD
   line: ["points", "strokeColor"],
   freedraw: ["points", "strokeColor"],
   text: ["position", "size", "text", "color", "fontSize"],
+  image: ["position", "size", "imageId"],
 };
 
 /**
@@ -271,6 +281,9 @@ function isElementType(v: unknown): v is ElementType {
   return typeof v === "string" && (ELEMENT_TYPES as readonly string[]).includes(v);
 }
 
+/** Upload ids are UUIDs. Holding them to that keeps a URL built from one pointing at an upload. */
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function isFieldValueValid(field: string, value: unknown): boolean {
   switch (field) {
     case "position":
@@ -286,6 +299,8 @@ function isFieldValueValid(field: string, value: unknown): boolean {
       return typeof value === "string";
     case "fontSize":
       return typeof value === "number";
+    case "imageId":
+      return typeof value === "string" && UUID.test(value);
     default:
       return false;
   }
