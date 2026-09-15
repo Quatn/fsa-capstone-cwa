@@ -30,3 +30,7 @@ Thumbs.db
 # Environment files
 .env
 .env.*
+
+# Test files
+junit.xml
+/coverage/
