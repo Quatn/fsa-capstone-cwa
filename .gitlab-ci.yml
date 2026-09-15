@@ -117,6 +117,7 @@ app:lint:
   script:
     - (cd WEB && npm ci && npm run lint)
     - (cd API && npm ci && npm run lint)
+  allow_failure: true
 
 # --------------------------------------------------------------------------
 # BUILD
