@@ -1,0 +1,48 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+  namespace: cwa
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+      - name: web
+        image: VAR_WEB_IMAGE:VAR_IMAGE_TAG
+        ports:
+        - containerPort: 8080
+        env:
+        - name: WEB_URL
+          valueFrom:
+            configMapKeyRef: { name: app-config, key: WEB_URL }
+        - name: API_URL
+          valueFrom:
+            configMapKeyRef: { name: app-config, key: API_URL }
+        - name: HTTP3_URL
+          valueFrom:
+            configMapKeyRef: { name: app-config, key: HTTP3_URL }
+        readinessProbe:
+          httpGet:
+            path: /
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: web
+  namespace: cwa
+spec:
+  selector:
+    app: web
+  ports:
+  - port: 3000
+    targetPort: 8080

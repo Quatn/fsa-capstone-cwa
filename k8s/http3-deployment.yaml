@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http3
+  namespace: cwa
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: http3
+  template:
+    metadata:
+      labels:
+        app: http3
+    spec:
+      containers:
+      - name: http3
+        image: VAR_HTTP3_IMAGE:VAR_IMAGE_TAG
+        ports:
+        - containerPort: 5000
+          protocol: UDP
+        env:
+        - name: WEB_URL
+          valueFrom: { configMapKeyRef: { name: app-config, key: WEB_URL } }
+        - name: API_URL
+          valueFrom: { configMapKeyRef: { name: app-config, key: API_URL } }
+        - name: HTTP3_URL
+          valueFrom: { configMapKeyRef: { name: app-config, key: HTTP3_URL } }
+        - name: HTTP3_HOST
+          valueFrom: { configMapKeyRef: { name: app-config, key: HTTP3_HOST } }
+        - name: REDIS_HOST
+          valueFrom: { configMapKeyRef: { name: app-config, key: REDIS_HOST } }
+        - name: REDIS_PORT
+          valueFrom: { configMapKeyRef: { name: app-config, key: REDIS_PORT } }
+        - name: REDIS_PASSWORD
+          valueFrom: { secretKeyRef: { name: app-secrets, key: REDIS_PASSWORD } }
+        - name: HTTP3_SECRET
+          valueFrom: { secretKeyRef: { name: app-secrets, key: HTTP3_SECRET } }
+        - name: REDIS_URL
+          value: "redis://:$(REDIS_PASSWORD)@$(REDIS_HOST):$(REDIS_PORT)"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: http3
+  namespace: cwa
+spec:
+  selector:
+    app: http3
+  ports:
+  - port: 5000
+    targetPort: 5000
+    protocol: UDP

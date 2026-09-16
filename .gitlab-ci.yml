@@ -34,8 +34,6 @@ default:
     DOCKER_HOST: tcp://docker:2375
     DOCKER_TLS_CERTDIR: ""
   before_script:
-    - echo "$CWA_REGISTRY_USER"
-    - echo "$CWA_REGISTRY"
     - docker login -u "$CWA_REGISTRY_USER" -p "$CWA_REGISTRY_PASSWORD" "$CWA_REGISTRY"
 
 .write_env: &write_env
@@ -127,8 +125,8 @@ app:lint:
 .build_template:
   stage: build
   extends: .docker
-  # rules:
-  #   - if: $CI_COMMIT_REF_PROTECTED == "true"
+  rules:
+    - if: $CI_COMMIT_REF_PROTECTED == "true"
   script:
     - >
       docker build
@@ -196,34 +194,64 @@ test:unit:
 # --------------------------------------------------------------------------
 # DEPLOY
 # --------------------------------------------------------------------------
+# deploy:staging:
+#   stage: deploy
+#   image: docker:27-cli
+#   environment:
+#     name: staging
+#   rules:
+#     - if: $CI_COMMIT_BRANCH == $STAGING_BRANCH
+#       when: manual
+#       allow_failure: false
+#   before_script:
+#     - eval $(ssh-agent -s)
+#     - echo "$DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
+#     - mkdir -p ~/.ssh && chmod 700 ~/.ssh
+#     - ssh-keyscan "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+#   script:
+#     - scp compose.yml "$DEPLOY_USER@$DEPLOY_HOST:/srv/cwa/compose.yml"
+#     - |
+#       ssh "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<EOF
+#         set -e
+#         mkdir -p /srv/cwa
+#         cd /srv/cwa
+#
+#         docker login -u "$CWA_REGISTRY_USER" -p "$CWA_REGISTRY_PASSWORD" "$CWA_REGISTRY"
+#         export TAG=$CI_COMMIT_SHA
+#         export WEB_IMAGE=$WEB_IMAGE
+#         export API_IMAGE=$API_IMAGE
+#         export HTTP3_IMAGE=$HTTP3_IMAGE
+#         docker compose pull
+#         docker compose up -d --wait
+#         docker image prune -f
+#       EOF
+
 deploy:staging:
   stage: deploy
-  image: docker:27-cli
+  image: bitnami/kubectl:1.30
   environment:
     name: staging
   rules:
-    - if: $CI_COMMIT_BRANCH == $STAGING_BRANCH
-      when: manual
-      allow_failure: false
+    # - if: $CI_COMMIT_BRANCH == $STAGING_BRANCH
+    - when: manual
+    - allow_failure: false
   before_script:
-    - eval $(ssh-agent -s)
-    - echo "$DEPLOY_SSH_KEY" | tr -d '\r' | ssh-add -
-    - mkdir -p ~/.ssh && chmod 700 ~/.ssh
-    - ssh-keyscan "$DEPLOY_HOST" >> ~/.ssh/known_hosts
+    - echo "$KUBE_CONFIG" | base64 -d > kubeconfig
+    - export KUBECONFIG=$(pwd)/kubeconfig
   script:
-    - scp compose.yml "$DEPLOY_USER@$DEPLOY_HOST:/srv/cwa/compose.yml"
-    - |
-      ssh "$DEPLOY_USER@$DEPLOY_HOST" bash -s <<EOF
-        set -e
-        mkdir -p /srv/cwa
-        cd /srv/cwa
+    - sed -i "s|VAR_WEB_IMAGE|$WEB_IMAGE|g; s|VAR_IMAGE_TAG|$CI_COMMIT_SHA|g" k8s/web-deployment.yaml
+    - sed -i "s|VAR_API_IMAGE|$API_IMAGE|g; s|VAR_IMAGE_TAG|$CI_COMMIT_SHA|g" k8s/api-deployment.yaml
+    - sed -i "s|VAR_HTTP3_IMAGE|$HTTP3_IMAGE|g; s|VAR_IMAGE_TAG|$CI_COMMIT_SHA|g" k8s/http3-deployment.yaml
 
-        docker login -u "$CWA_REGISTRY_USER" -p "$CWA_REGISTRY_PASSWORD" "$CWA_REGISTRY"
-        export TAG=$CI_COMMIT_SHA
-        export WEB_IMAGE=$WEB_IMAGE
-        export API_IMAGE=$API_IMAGE
-        export HTTP3_IMAGE=$HTTP3_IMAGE
-        docker compose pull
-        docker compose up -d --wait
-        docker image prune -f
-      EOF
+    - sed -i "s|VAR_WEB_URL|$WEB_URL|g; s|VAR_API_URL|$API_URL|g; s|VAR_HTTP3_URL|$HTTP3_URL|g; s|VAR_HTTP3_HOST|$HTTP3_HOST|g; s|VAR_DB_HOST|$DB_HOST|g; s|VAR_DB_PORT|$DB_PORT|g; s|VAR_REDIS_HOST|$REDIS_HOST|g; s|VAR_REDIS_PORT|$REDIS_PORT|g" k8s/configmap.tmpl.yaml
+
+    - cat k8s/configmap.tmpl.yaml
+    - cp k8s/configmap.tmpl.yaml k8s/configmap.yaml
+
+    - kubectl apply -f k8s/configmap.yaml
+    - kubectl apply -f k8s/web-deployment.yaml
+    - kubectl apply -f k8s/api-deployment.yaml
+    - kubectl apply -f k8s/http3-deployment.yaml
+    - kubectl rollout status deployment/web -n cwa --timeout=120s
+    - kubectl rollout status deployment/api -n cwa --timeout=120s
+    - kubectl rollout status deployment/http3 -n cwa --timeout=120s
