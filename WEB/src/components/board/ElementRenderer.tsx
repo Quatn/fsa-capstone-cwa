@@ -5,10 +5,12 @@ import type Konva from "konva";
 import type {
   BoardElement,
   ElementType,
+  ImageElementData,
   LinearData,
   ShapeData,
   TextData,
 } from "@/types/board";
+import type { CameraStore } from "@/lib/board/camera";
 import { NOT_EXPORTED } from "@/lib/board/exportImage";
 import { diamondPoints, flattenPoints } from "@/lib/board/geometry";
 import {
@@ -16,6 +18,7 @@ import {
   TEXT_LINE_HEIGHT,
   TEXT_PADDING,
 } from "@/lib/board/text";
+import { BoardImage } from "./BoardImage";
 
 export type KonvaMouseEvent = Konva.KonvaEventObject<MouseEvent>;
 export type KonvaDragEvent = Konva.KonvaEventObject<DragEvent>;
@@ -27,6 +30,8 @@ interface ElementRendererProps {
   draggable: boolean;
   /** True while this element's text is being typed into the overlaid textarea. */
   editing: boolean;
+  /** Followed by images, which fetch a sharper copy as the view zooms in. */
+  cameraStore: CameraStore;
   /** Registers the underlying Konva node so BoardCanvas can attach a Transformer to it. */
   registerNode: (id: string, node: Konva.Node | null) => void;
   onSelect: (id: string) => void;
@@ -46,6 +51,7 @@ export function ElementRenderer({
   selected,
   draggable,
   editing,
+  cameraStore,
   registerNode,
   onSelect,
   onStartEdit,
@@ -58,6 +64,25 @@ export function ElementRenderer({
     onSelect(id);
   };
 
+  // What dragging or resizing commits for anything placed by its top-left
+  // corner and size: rectangles, diamonds and images.
+  const commitBoxDrag = (e: KonvaDragEvent) => {
+    onCommitFields(id, type, {
+      position: { x: e.target.x(), y: e.target.y() },
+    });
+  };
+  const commitBoxResize = (e: KonvaTransformEvent) => {
+    const node = e.target as Konva.Node;
+    const newWidth = Math.max(4, node.width() * node.scaleX());
+    const newHeight = Math.max(4, node.height() * node.scaleY());
+    node.scaleX(1);
+    node.scaleY(1);
+    onCommitFields(id, type, {
+      position: { x: node.x(), y: node.y() },
+      size: { width: newWidth, height: newHeight },
+    });
+  };
+
   if (type === "rectangle" || type === "diamond") {
     const d = data as Partial<ShapeData>;
     if (!d.position || !d.size) return null;
@@ -68,23 +93,6 @@ export function ElementRenderer({
         ? d.backgroundColor
         : undefined;
     const stroke = d.strokeColor ?? "#1f2937";
-
-    const handleDragEnd = (e: KonvaDragEvent) => {
-      onCommitFields(id, type, {
-        position: { x: e.target.x(), y: e.target.y() },
-      });
-    };
-    const handleTransformEnd = (e: KonvaTransformEvent) => {
-      const node = e.target as Konva.Node;
-      const newWidth = Math.max(4, node.width() * node.scaleX());
-      const newHeight = Math.max(4, node.height() * node.scaleY());
-      node.scaleX(1);
-      node.scaleY(1);
-      onCommitFields(id, type, {
-        position: { x: node.x(), y: node.y() },
-        size: { width: newWidth, height: newHeight },
-      });
-    };
 
     return (
       <Group>
@@ -100,8 +108,8 @@ export function ElementRenderer({
             strokeWidth={2}
             draggable={draggable}
             onMouseDown={stopBubbleAndSelect}
-            onDragEnd={handleDragEnd}
-            onTransformEnd={handleTransformEnd}
+            onDragEnd={commitBoxDrag}
+            onTransformEnd={commitBoxResize}
           />
         ) : (
           <Line
@@ -117,8 +125,8 @@ export function ElementRenderer({
             strokeWidth={2}
             draggable={draggable}
             onMouseDown={stopBubbleAndSelect}
-            onDragEnd={handleDragEnd}
-            onTransformEnd={handleTransformEnd}
+            onDragEnd={commitBoxDrag}
+            onTransformEnd={commitBoxResize}
           />
         )}
         {selected && (
@@ -239,6 +247,43 @@ export function ElementRenderer({
             opacity={0.25}
             lineCap="round"
             lineJoin="round"
+            listening={false}
+          />
+        )}
+      </Group>
+    );
+  }
+
+  if (type === "image") {
+    const d = data as Partial<ImageElementData>;
+    if (!d.position || !d.size || !d.imageId) return null;
+    const { x, y } = d.position;
+    const { width, height } = d.size;
+
+    return (
+      <Group>
+        <BoardImage
+          ref={(node) => registerNode(id, node)}
+          imageId={d.imageId}
+          x={x}
+          y={y}
+          width={width}
+          height={height}
+          draggable={draggable}
+          cameraStore={cameraStore}
+          onMouseDown={stopBubbleAndSelect}
+          onDragEnd={commitBoxDrag}
+          onTransformEnd={commitBoxResize}
+        />
+        {selected && (
+          <Rect
+            name={NOT_EXPORTED}
+            x={x - 3}
+            y={y - 3}
+            width={width + 6}
+            height={height + 6}
+            stroke={SELECTION_COLOR}
+            dash={[3, 3]}
             listening={false}
           />
         )}

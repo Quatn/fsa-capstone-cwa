@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Group, Layer, Line, Rect, Stage, Transformer } from "react-konva";
 import type Konva from "konva";
+import { toast } from "react-toastify";
 import { useBoardTool, type BoardTool } from "@/context/BoardToolContext";
 import type { BoardElementsById, OpHandler } from "@/hooks/useBoardTransport";
 import { useUndoRedo, type HistoryEntry } from "@/hooks/useUndoRedo";
@@ -11,8 +12,14 @@ import { TextEditor } from "./TextEditor";
 import {
   boxFromDrag,
   diamondPoints,
+  fitWithin,
   flattenPoints,
 } from "@/lib/board/geometry";
+import {
+  IMAGE_ACCEPT,
+  MAX_IMAGE_BYTES,
+  readImageSize,
+} from "@/lib/board/images";
 import {
   applyView,
   focusStageOn,
@@ -22,7 +29,13 @@ import {
   type CameraStore,
 } from "@/lib/board/camera";
 import { minTextBoxSize, textHeightAtWidth } from "@/lib/board/text";
-import type { BoardElement, ElementType, Point, TextData } from "@/types/board";
+import type {
+  BoardElement,
+  ElementType,
+  Point,
+  Size,
+  TextData,
+} from "@/types/board";
 import type { Dispatch, RefObject, SetStateAction } from "react";
 
 const SHAPE_TYPES: readonly BoardTool[] = ["rectangle", "diamond", "ellipse"];
@@ -33,6 +46,16 @@ const RESIZABLE_TYPES: readonly BoardTool[] = [
   "diamond",
   "ellipse",
   "text",
+  "image",
+];
+/** Images resize from the corners only, which keep their proportions. */
+const IMAGE_ANCHORS = ["top-left", "top-right", "bottom-left", "bottom-right"];
+const ALL_ANCHORS = [
+  ...IMAGE_ANCHORS,
+  "top-center",
+  "middle-right",
+  "bottom-center",
+  "middle-left",
 ];
 
 function isElementType(tool: BoardTool): tool is ElementType {
@@ -106,6 +129,8 @@ interface BoardCanvasProps {
   onCameraGesture?: () => void;
   /** Attached to the group holding every element, which is what an export draws. */
   boardRef?: RefObject<Konva.Group | null>;
+  /** Uploads a picture for the Image tool, resolving to the id the API gave it. */
+  uploadImage: (file: File) => Promise<string>;
 }
 
 export function BoardCanvas({
@@ -120,6 +145,7 @@ export function BoardCanvas({
   cameraStore,
   onCameraGesture,
   boardRef,
+  uploadImage,
 }: BoardCanvasProps) {
   const { tool, color, fontSize, selectedIds, setSelectedIds } = useBoardTool();
 
@@ -128,6 +154,10 @@ export function BoardCanvas({
   const nodeRefs = useRef<Record<string, Konva.Node>>({});
   const lastDatagramAtRef = useRef(0);
   const groupDragRef = useRef<GroupDrag | null>(null);
+  // The Image tool's file picker, and where on the board the click that
+  // opened it landed.
+  const imageInputRef = useRef<HTMLInputElement>(null);
+  const imageAtRef = useRef<Point | null>(null);
 
   // Kept in sync via effect below so commitFields/createElement/deleteSelected
   // can read the latest elements without needing `elements` in their own
@@ -489,6 +519,42 @@ export function BoardCanvas({
     [setElements, sendOp, record],
   );
 
+  // Uploads a picture chosen with the Image tool and puts it on the board
+  // with its top-left corner at `at`, where the board was clicked.
+  const insertImage = useCallback(
+    async (file: File, at: Point) => {
+      const stage = stageRef.current;
+      if (!stage) return;
+      if (file.size > MAX_IMAGE_BYTES) {
+        toast.error("That image is over 10 MB.");
+        return;
+      }
+      let natural: Size;
+      let imageId: string;
+      try {
+        natural = await readImageSize(file);
+        imageId = await toast.promise(uploadImage(file), {
+          pending: "Uploading image…",
+        });
+      } catch {
+        toast.error("Couldn't add that image. PNG, JPEG, GIF and WebP work.");
+        return;
+      }
+      // At its own size, unless that's more than half the view: then shrunk to fit.
+      const scale = stage.scaleX();
+      const size = fitWithin(natural, {
+        width: stage.width() / scale / 2,
+        height: stage.height() / scale / 2,
+      });
+      createElement("image", { position: at, size, imageId }, [
+        "position",
+        "size",
+        "imageId",
+      ]);
+    },
+    [uploadImage, createElement],
+  );
+
   const handleStartEdit = useCallback(
     (id: string) => {
       if (tool !== "select") return; // the text tool is busy drawing new boxes
@@ -767,12 +833,28 @@ export function BoardCanvas({
     createElement,
   ]);
 
+  // With the Image tool, a click marks where the picture's top-left corner
+  // goes and opens the file picker. It has to open inside the click itself:
+  // browsers only show a file dialog in answer to something the user did.
+  const handleStageClick = useCallback(
+    (e: Konva.KonvaEventObject<MouseEvent>) => {
+      if (tool !== "image" || altPanning || e.evt.button !== 0) return;
+      const p = getWorldPointer();
+      if (!p) return;
+      imageAtRef.current = p;
+      imageInputRef.current?.click();
+    },
+    [tool, altPanning, getWorldPointer],
+  );
+
   const editingElement = editingId ? elements[editingId] : null;
   const editingData =
     editingElement?.type === "text"
       ? (editingElement.data as Partial<TextData>)
       : null;
   const selectedSet = new Set(selectedIds);
+  const onlySelected =
+    selectedIds.length === 1 ? elements[selectedIds[0]] : undefined;
 
   return (
     <>
@@ -781,13 +863,20 @@ export function BoardCanvas({
         width={size.width}
         height={size.height}
         draggable={panning}
-        className={panning ? "cursor-grab active:cursor-grabbing" : undefined}
+        className={
+          panning
+            ? "cursor-grab active:cursor-grabbing"
+            : tool === "image"
+              ? "cursor-crosshair"
+              : undefined
+        }
         onWheel={handleWheel}
         onDragStart={handleStageDragStart}
         onDragMove={handleStageDragMove}
         onMouseDown={handleStageMouseDown}
         onMouseMove={handleStageMouseMove}
         onMouseUp={handleStageMouseUp}
+        onClick={handleStageClick}
       >
         <Layer>
           {/* Existing elements only take the pointer in Select mode, and not
@@ -806,6 +895,7 @@ export function BoardCanvas({
                   selected={selectedSet.has(el.id)}
                   draggable={tool === "select"}
                   editing={el.id === editingId}
+                  cameraStore={cameraStore}
                   registerNode={registerNode}
                   onSelect={handleSelect}
                   onStartEdit={handleStartEdit}
@@ -900,6 +990,9 @@ export function BoardCanvas({
             // While panning, a press on a resize handle pans too.
             listening={!panning}
             rotateEnabled={false}
+            enabledAnchors={
+              onlySelected?.type === "image" ? IMAGE_ANCHORS : ALL_ANCHORS
+            }
             boundBoxFunc={(oldBox, newBox) => {
               // Stop a text box being dragged smaller than the text it holds.
               // Rejecting the whole frame (returning oldBox) rather than just
@@ -937,6 +1030,22 @@ export function BoardCanvas({
           onCommit={handleCommitText}
         />
       )}
+
+      {/* The Image tool's file picker, opened by a click on the board. */}
+      <input
+        ref={imageInputRef}
+        type="file"
+        accept={IMAGE_ACCEPT}
+        hidden
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          const at = imageAtRef.current;
+          // Cleared so picking the same file again still counts as a change.
+          e.target.value = "";
+          imageAtRef.current = null;
+          if (file && at) void insertImage(file, at);
+        }}
+      />
     </>
   );
 }
