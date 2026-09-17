@@ -46,7 +46,7 @@ const StateDisplay = ({
 // need for the server-component-can't-read-NEXT_PUBLIC nuance that never
 // actually applied, but keeping it colocated with where it's used).
 const BOARD_WS_URL =
-  process.env.NEXT_PUBLIC_BOARD_WS_URL ?? "https://127.0.0.1:5000/wt";
+  process.env.NEXT_PUBLIC_HTTP3_URL ?? "https://127.0.0.1:5000/wt";
 const BOARD_CERT_HASH = process.env.NEXT_PUBLIC_BOARD_CERT_HASH ?? null;
 
 export default function RoomInterfacePage() {
