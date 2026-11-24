@@ -23,7 +23,7 @@ export interface Config {
   wt: string;
   web: string;
   /** Base64 SHA-256 of the server certificate, pinned exactly as the browser pins it. */
-  certHash: string;
+  certHash: string | null;
   json: string | null;
 }
 
@@ -159,7 +159,8 @@ export function loadConfig(argv: string[]): Config | null {
     wt: values.wt ?? "https://127.0.0.1:5000/wt",
     web: trimSlash(values.web ?? "http://localhost:8080"),
     certHash:
-      values["cert-hash"] ?? certHashFrom(values.cert ?? DEFAULT_CERT_PATH),
+      // values["cert-hash"] ?? certHashFrom(values.cert ?? DEFAULT_CERT_PATH),
+      values["cert-hash"] ?? null,
     json: values.json ?? null,
   };
 }

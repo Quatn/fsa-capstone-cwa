@@ -56,10 +56,14 @@ export class Session {
     private readonly datagramWriter: WritableStreamDefaultWriter<Uint8Array>,
   ) {}
 
-  static async open(url: string, certHash: Uint8Array): Promise<Session> {
-    const transport = new WebTransport(url, {
-      serverCertificateHashes: [{ algorithm: "sha-256", value: certHash }],
-    });
+  static async open(url: string, certHash: Uint8Array | null): Promise<Session> {
+    const transport = 
+      (() => {
+        if (certHash === null) return new WebTransport(url);
+        return new WebTransport(url, {
+          serverCertificateHashes: [{ algorithm: "sha-256", value: certHash }],
+        });
+      })();
     // A dropped session rejects `closed`; its streams surface the failure.
     transport.closed.catch(() => {});
     await transport.ready;
